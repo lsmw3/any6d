@@ -1,0 +1,47 @@
+{
+    "exp_name": "vae/release-test",
+
+    "gpu_id" : [0],
+
+    "ckpt_path" : null,
+  
+    "VaeModelSpecs" : {
+      "in_channels" : 384, 
+      "latent_dim" : 384
+    },
+
+    "train_set" : {
+      "dataset_name" : "vae",
+      "data_root" : "/home/lu/project/LaRa/overfit_data/housecat_objects_instances",
+      "split": "train"
+    },
+
+    "test_set" : {
+      "dataset_name" : "vae",
+      "data_root" : "/home/lu/project/LaRa/overfit_data/housecat_objects_instances",
+      "split": "test"
+    },
+  
+    "batch_size" : 4,
+    "num_epochs" : 300,
+    "kld_weight" : 1e-5,
+    "latent_std" : 0.25,
+    "warmup_iters" : 15,
+  
+    "lr" : 1e-4,
+
+    "check_val_every_n_epoch" : 10,
+
+    "infer" : {
+      "ckpt_path" : "/home/lu/project/LaRa/logs/vae/release-test/vae_test_epoch=299.ckpt",
+      "num_samples" : 4
+    },
+
+    "logger" : {
+      "name" : "wandb",
+      "dir": "logs/vae/release-test"
+    }
+}
+  
+  
+  
