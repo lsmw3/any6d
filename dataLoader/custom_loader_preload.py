@@ -181,7 +181,7 @@ class custom_loader_preload(torch.utils.data.Dataset):
         return np.stack(imgs), np.stack(bg_colors), np.stack(normals), np.stack(exts), np.stack(w2cs), np.stack(ixts), np.stack(masks)
     
     def pcd_voxelization(self, point_cloud, resolution):
-        points_scaled = (point_cloud + 1) * resolution / 2
+        points_scaled = (point_cloud + 0.5) * resolution
 
         voxel_indices = np.floor(points_scaled).astype(int)
         voxel_indices = np.clip(voxel_indices, 0, resolution)

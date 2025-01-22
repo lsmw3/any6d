@@ -67,9 +67,9 @@ class Losses(nn.Module):
 
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
-                # loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()
-                #loss += color_loss_all.mean()*10
-                loss += color_loss_all.mean()
+                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
+                # loss += color_loss_all.mean()*10
+                # loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
                     torch.log(torch.Tensor([10.]).to(color_loss_all.device))
@@ -100,7 +100,7 @@ class Losses(nn.Module):
                     if gt_normal_world is not None:
                         loss_surface = self.cos_loss(rend_normal_world, gt_normal_world, mask)
                         scalar_stats.update({f'normal{prex}': loss_surface.detach()})
-                    #     loss += loss_surface * 0.2 # / (loss_surface / loss_cd).detach()
+                        # loss += loss_surface * 0.2 # / (loss_surface / loss_cd).detach()
 
                     normal_error = ((1 - (rend_normal_world * depth_normal).sum(dim=-1))*acc_map).mean()
                     scalar_stats.update({f'depth_norm{prex}': normal_error.detach()})

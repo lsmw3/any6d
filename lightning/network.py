@@ -709,7 +709,7 @@ class Network(L.LightningModule):
         super(Network, self).__init__()
 
         self.cfg = cfg
-        self.scene_size = 1.0
+        self.scene_size = 0.5
         self.offset_size = 0.005
         self.white_bkgd = white_bkgd
 
@@ -752,7 +752,8 @@ class Network(L.LightningModule):
         # grouping configuration
         self.n_offset_groups = cfg.model.n_offset_groups # 16
         self.register_buffer("group_centers", self.build_dense_grid(self.grid_reso))
-        self.group_centers = self.group_centers.reshape(1,-1,3)
+        # self.group_centers = self.group_centers.reshape(1,-1,3)
+        self.group_centers = self.group_centers.reshape(1,*self.group_centers.shape)
 
         # 2DGS model
         self.sh_dim = (cfg.model.sh_degree+1)**2*3
@@ -766,9 +767,9 @@ class Network(L.LightningModule):
         self.gs_render = Renderer(sh_degree=cfg.model.sh_degree, white_background=white_bkgd, radius=1)
 
         # parameters initialization
-        self.opacity_shift = 0 # -2.15
-        # self.scaling_shift = np.log(0.5*self.voxel_size/3.0)
-        self.scaling_shift = -2.4
+        self.opacity_shift = -2.1792 # -2.15
+        self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
+        # self.scaling_shift = -4
 
         # # VAE
         # self.specs = specs
@@ -838,10 +839,18 @@ class Network(L.LightningModule):
             nn.Sigmoid()
         )
 
+        # learnable 2dgs parameters
+        self.r = self.R
+        self.offset = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 3)*0.78+0.16, requires_grad=True)
+        self.shs = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 4, 3)*0.76+0.24, requires_grad=True)
+        self.scaling = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 2)*0.72-4, requires_grad=True)
+        self.rotation = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 4)*0.66-0.22, requires_grad=True)
+        self.opacity = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 1)*0.57+0.11, requires_grad=True)
+
     def build_dense_grid(self, reso):
         array = torch.arange(reso, device=self.device)
         grid = torch.stack(torch.meshgrid(array, array, array, indexing='ij'),dim=-1)
-        grid = (grid + 0.5) / reso * 2 -1
+        grid = (grid + 0.5) / reso * 2 - 1
         return grid.reshape(reso,reso,reso,3)*self.scene_size
 
 
@@ -880,8 +889,8 @@ class Network(L.LightningModule):
     def get_offseted_pt(self, offset, K, center_pt=None):
         B = offset.shape[0]
         if center_pt is None:
-            half_cell_size = 0.5*self.voxel_size # 0.5*self.scene_size/self.n_offset_groups
-            centers = self.group_centers.unsqueeze(-2).expand(B,-1,K,-1) + offset*half_cell_size
+            half_cell_size = self.scene_size/self.n_offset_groups # 0.5*self.voxel_size
+            centers = self.group_centers.unsqueeze(-2).expand(B,-1,-1,-1,K,-1) + offset*half_cell_size
         else:
             assert offset.shape == center_pt.shape
             centers = center_pt + offset * self.offset_size
@@ -1294,7 +1303,8 @@ class Network(L.LightningModule):
         pred_volume = self.vol_classifier(feat_vol.permute(0, 2, 3, 4, 1)).squeeze(-1) # (B*N, 16, 16, 16)
         volume_feature = feat_vol.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim) # (B*N, 16*16*16, 128)
         # volume_feature = feat_vol_upsampled.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim)
-        feat_mask = torch.round(pred_volume).reshape(B*N, -1) # (B*N, 16*16*16)
+        # feat_mask = torch.round(gt_volume).reshape(B*N, -1) # (B*N, 16*16*16)
+        feat_mask = torch.round(gt_volume) # (B*N, 16, 16, 16)
 
         # vae_input = proj_feat.reshape(B,-1,3,self.R,self.R).permute(0,2,1,3,4) #B,3,C_proj,R,R
         # vae_input = vae_input.reshape(B,-1,self.R,self.R) #B,3*C_proj,R,R
@@ -1322,8 +1332,20 @@ class Network(L.LightningModule):
         # volume_feat_up = self.vol_decoder(feat_vol)
 
         # rendering
-        _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift)
+        # _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift)
         # _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(feat_vol, self.opacity_shift, self.scaling_shift)
+
+        # _offset_coarse = self.offset.reshape(self.r**3, 4, 3).unsqueeze(0).expand(B*N, -1, -1, -1)
+        # _shs_coarse = self.shs.reshape(self.r**3, 4, 4, 3).unsqueeze(0).expand(B*N, -1, -1, -1, -1)
+        # _scaling_coarse = self.scaling.reshape(self.r**3, 4, 2).unsqueeze(0).expand(B*N, -1, -1, -1)
+        # _rotation_coarse = self.rotation.reshape(self.r**3, 4, 4).unsqueeze(0).expand(B*N, -1, -1, -1)
+        # _opacity_coarse = self.opacity.reshape(self.r**3, 4, 1).unsqueeze(0).expand(B*N, -1, -1, -1)
+
+        _offset_coarse = self.offset.unsqueeze(0).expand(B*N, *self.offset.shape)
+        _shs_coarse = self.shs.unsqueeze(0).expand(B*N, *self.shs.shape)
+        _scaling_coarse = self.scaling.unsqueeze(0).expand(B*N, *self.scaling.shape)
+        _rotation_coarse = self.rotation.unsqueeze(0).expand(B*N, *self.rotation.shape)
+        _opacity_coarse = self.opacity.unsqueeze(0).expand(B*N, *self.opacity.shape)
 
         # convert to local positions
         # if prex == 'train':
@@ -1348,30 +1370,18 @@ class Network(L.LightningModule):
             height, width = int(batch['meta']['tar_h'][i]*render_img_scale), int(batch['meta']['tar_w'][i]*render_img_scale)
 
             mask = feat_mask[i]
-            # if start_feat:
-            #     _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[3:])
-            #     _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[3:])
-            #     _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[3:])
-            #     _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[3:])
-            #     _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[3:])
-            # else:
-            #     _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[3:])
-            #     _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[3:])
-            #     _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[3:])
-            #     _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[3:])
-            #     _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[3:])
 
-            #_centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[3:])
-            #_shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[3:])
-            #_opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[3:])
-            #_scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[3:])
-            #_rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[3:])
+            _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
+            _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
+            _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
+            _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
+            _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
 
-            _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[3:])
-            _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[3:])
-            _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[3:])
-            _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[3:])
-            _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[3:])
+            # _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
+            # _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
+            # _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
+            # _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
+            # _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
 
             if return_buffer:
                 render_pkg.append((_centers, _shs, _opacity, _scaling, _rotation))

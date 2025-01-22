@@ -9,7 +9,7 @@ model:
     n_groups: [4]  # n_groups for local attention
     n_offset_groups: 16     # offset radius of 1/n_offset_groups of the scene size
 
-    K: 4    # primitives per-voxel
+    K: 16  # primitives per-voxel
     sh_degree: 1    # view dependent color
 
     # num_layers: 6 # 12

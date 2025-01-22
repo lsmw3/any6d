@@ -254,20 +254,16 @@ class system(L.LightningModule):
         num_devices = max(1, self.trainer.num_devices)
         num_steps = dataset_size * self.trainer.max_epochs * self.cfg.train.limit_train_batches // (self.trainer.accumulate_grad_batches * num_devices)
         return int(num_steps)
-
+    
     def configure_optimizers(self):
         decay_params, no_decay_params = [], []
 
         # add all bias and LayerNorm params to no_decay_params
-        for name, module in self.named_modules():
-            if isinstance(module, nn.LayerNorm):
-                no_decay_params.extend([p for p in module.parameters()])
-            elif hasattr(module, 'bias') and module.bias is not None:
-                no_decay_params.append(module.bias)
-
-        # add remaining parameters to decay_params
-        _no_decay_ids = set(map(id, no_decay_params))
-        decay_params = [p for p in self.parameters() if id(p) not in _no_decay_ids]
+        for name, param in self.named_parameters():
+            if 'bias' in name or 'LayerNorm' in name:
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
 
         # filter out parameters with no grad
         decay_params = list(filter(lambda p: p.requires_grad, decay_params))
@@ -284,17 +280,48 @@ class system(L.LightningModule):
             betas=(self.cfg.train.beta1, self.cfg.train.beta2),
         )
 
-        total_global_batches = self.num_steps()
-        # scheduler = CosineWarmupScheduler(
-        #                 optimizer=optimizer,
-        #                 warmup_iters=self.cfg.train.warmup_iters,
-        #                 max_iters=2 * total_global_batches,
-        #             )
+        return {"optimizer": optimizer}
 
-        return {"optimizer": optimizer,
-                # "lr_scheduler": {
-                # 'scheduler': scheduler,
-                # 'interval': 'step'  # or 'epoch' for epoch-level updates
-                # }
-            }
+    # def configure_optimizers(self):
+    #     decay_params, no_decay_params = [], []
+
+    #     # add all bias and LayerNorm params to no_decay_params
+    #     for name, module in self.named_modules():
+    #         if isinstance(module, nn.LayerNorm):
+    #             no_decay_params.extend([p for p in module.parameters()])
+    #         elif hasattr(module, 'bias') and module.bias is not None:
+    #             no_decay_params.append(module.bias)
+
+    #     # add remaining parameters to decay_params
+    #     _no_decay_ids = set(map(id, no_decay_params))
+    #     decay_params = [p for p in self.parameters() if id(p) not in _no_decay_ids]
+
+    #     # filter out parameters with no grad
+    #     decay_params = list(filter(lambda p: p.requires_grad, decay_params))
+    #     no_decay_params = list(filter(lambda p: p.requires_grad, no_decay_params))
+
+    #     # Optimizer
+    #     opt_groups = [
+    #         {'params': decay_params, 'weight_decay': self.cfg.train.weight_decay},
+    #         {'params': no_decay_params, 'weight_decay': 0.0},
+    #     ]
+    #     optimizer = torch.optim.AdamW(
+    #         opt_groups,
+    #         lr=self.cfg.train.lr,
+    #         betas=(self.cfg.train.beta1, self.cfg.train.beta2),
+    #     )
+
+    #     total_global_batches = self.num_steps()
+    #     # scheduler = CosineWarmupScheduler(
+    #     #                 optimizer=optimizer,
+    #     #                 warmup_iters=self.cfg.train.warmup_iters,
+    #     #                 max_iters=2 * total_global_batches,
+    #     #             )
+
+    #     return {"optimizer": optimizer,
+    #             # "lr_scheduler": {
+    #             # 'scheduler': scheduler,
+    #             # 'interval': 'step'  # or 'epoch' for epoch-level updates
+    #             # }
+    #         }
     
