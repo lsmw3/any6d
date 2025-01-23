@@ -28,6 +28,9 @@ from pytorch3d.ops import sample_farthest_points, knn_points, knn_gather
 from pytorch3d.renderer import PerspectiveCameras
 from timm.models.vision_transformer import Attention, Mlp, PatchEmbed
 
+def inverse_sigmoid(x):
+    return torch.log(x/(1-x))
+
 class DinoWrapper(L.LightningModule):
     """
     Dino v1 wrapper using huggingface transformer implementation.
@@ -841,11 +844,12 @@ class Network(L.LightningModule):
 
         # learnable 2dgs parameters
         self.r = self.R
-        self.offset = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 3)*0.78+0.16, requires_grad=True)
-        self.shs = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 4, 3)*0.76+0.24, requires_grad=True)
-        self.scaling = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 2)*0.72-4, requires_grad=True)
-        self.rotation = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 4)*0.66-0.22, requires_grad=True)
-        self.opacity = nn.Parameter(torch.randn(self.r, self.r, self.r, self.K, 1)*0.57+0.11, requires_grad=True)
+        self.offset = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 3), dtype=torch.float32)*0.78+0.16, requires_grad=True)
+        self.shs = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 4, 3), dtype=torch.float32), requires_grad=True)
+        self.scaling = nn.Parameter(torch.ones((self.r, self.r, self.r, self.K, 2), dtype=torch.float32)*0.72-4.0, requires_grad=True)
+        self.rotation = nn.Parameter(torch.rand((self.r, self.r, self.r, self.K, 4), dtype=torch.float32)*0.66-0.22, requires_grad=True)
+        opacity = inverse_sigmoid(0.1 * torch.ones((self.r, self.r, self.r, self.K, 1), dtype=torch.float32))
+        self.opacity = nn.Parameter(opacity, requires_grad=True)
 
     def build_dense_grid(self, reso):
         array = torch.arange(reso, device=self.device)
@@ -1354,7 +1358,7 @@ class Network(L.LightningModule):
         #     centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3) # (B*N, 1024*2, 3), gt_pc
         # centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3)
         
-        _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16*16*16, K, 3)
+        _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16*16*16, K, 3))
 
         # _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B, 1024*2)
         # masks =  _opacity_coarse_tmp > 0.5
@@ -1371,17 +1375,17 @@ class Network(L.LightningModule):
 
             mask = feat_mask[i]
 
-            _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
-            _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
-            _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
-            _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
-            _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
+            # _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
+            # _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
+            # _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
+            # _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
+            # _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
 
-            # _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
-            # _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
-            # _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
-            # _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
-            # _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
+            _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
+            _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
+            _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
+            _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
+            _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
 
             if return_buffer:
                 render_pkg.append((_centers, _shs, _opacity, _scaling, _rotation))

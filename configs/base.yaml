@@ -9,7 +9,7 @@ model:
     n_groups: [4]  # n_groups for local attention
     n_offset_groups: 16     # offset radius of 1/n_offset_groups of the scene size
 
-    K: 16  # primitives per-voxel
+    K: 8  # primitives per-voxel
     sh_degree: 1    # view dependent color
 
     # num_layers: 6 # 12
@@ -95,7 +95,7 @@ train:
     weight_decay: 0.05
     # betas: [0.9, 0.95]
     warmup_iters: 10
-    n_epoch: 1500
+    n_epoch: 30000
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
     check_val_every_n_epoch: 500

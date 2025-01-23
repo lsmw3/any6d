@@ -67,8 +67,8 @@ class Losses(nn.Module):
 
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
-                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
-                # loss += color_loss_all.mean()*10
+                # loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
+                loss += color_loss_all.mean()*100
                 # loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \

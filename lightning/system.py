@@ -63,6 +63,16 @@ class system(L.LightningModule):
     #     self.data_loading_times.clear()
     #     self.training_step_times.clear()
 
+    # def on_before_optimizer_step(self, optimizer):
+    #     for name, param in self.named_parameters():
+    #         if 'shs' in name or 'offset' in name or 'scaling' in name:
+    #             print("before:", name, param.clone()[torch.where(param.grad != 0)])
+
+    # def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
+    #     for name, param in self.named_parameters():
+    #         if 'shs' in name or 'offset' in name or 'scaling' in name:
+    #             print("after:", name, param.clone()[torch.where(param.grad != 0)])
+
     def training_step(self, batch, batch_idx):
         # start_time = time.time()
         self.net.train()
@@ -93,7 +103,7 @@ class system(L.LightningModule):
         # loss += loss_ae
         # self.log('train loss', loss)
 
-        if 0 == self.trainer.global_step % 10  and (self.trainer.local_rank == 0):
+        if 0 == self.trainer.global_step % 300  and (self.trainer.local_rank == 0):
             self.vis_results(output, batch, prex='train')
             self.vis_results_aux(output, batch, prex='train')
             self.vis_volume(output, prex='train')
