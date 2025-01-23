@@ -89,7 +89,7 @@ test_dataset:
 
 train:
     batch_size: 4
-    lr: 1e-4
+    lr: 1e-2
     beta1: 0.9
     beta2: 0.95
     weight_decay: 0.05

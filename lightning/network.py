@@ -1375,17 +1375,17 @@ class Network(L.LightningModule):
 
             mask = feat_mask[i]
 
-            # _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
-            # _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
-            # _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
-            # _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
-            # _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
+            _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
+            _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
+            _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
+            _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
+            _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
 
-            _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
-            _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
-            _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
-            _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
-            _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
+            # _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
+            # _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
+            # _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
+            # _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
+            # _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
 
             if return_buffer:
                 render_pkg.append((_centers, _shs, _opacity, _scaling, _rotation))
