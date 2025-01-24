@@ -121,11 +121,8 @@ class Losses(nn.Module):
                     positive_weight = 10
                     # loss_vol = nn.BCELoss()(pred_volume, gt_volume)
                     loss_vol = weighted_bce_loss(pred_volume, gt_volume, positive_weight)
-                    # if optimize_gaussian:
-                    #     loss += loss_vol*0.2
-                    # else:
-                    #     loss = loss_vol*0.2
-                    #loss += loss_vol*0.2
+                    # loss += loss_vol*0.2
+                    # loss = loss_vol*10
                 
                     scalar_stats.update({f'classification BCE': loss_vol.detach()})
                 else:

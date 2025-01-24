@@ -589,7 +589,7 @@ class Decoder(L.LightningModule):
                 torch.nn.init.zeros_(layer.bias.data)
 
     
-    def forward_coarse(self, feats, opacity_shift, scaling_shift):
+    def forward_coarse(self, feats, opacity_shift, scaling_shift, R):
         parameters = self.mlp_coarse(feats).float() # (B*N, 16*16*16, K*(3+19))
         parameters = parameters.view(*parameters.shape[:-1],self.K,-1) # (B, 16*16*16, K, 3+19)
         offset, sh, opacity, scaling, rotation = torch.split(parameters, [3, self.sh_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
@@ -599,11 +599,11 @@ class Decoder(L.LightningModule):
         # offset = torch.sigmoid(offset)*2-1.0
 
         B = opacity.shape[0]
-        sh = sh.view(B,-1,self.K,self.sh_dim//3,3) # (B, 16*16*16, K, 4, 3)
-        opacity = opacity.view(B,-1,self.K,self.opacity_dim) # (B, 16*16*16, K, 1)
-        scaling = scaling.view(B,-1,self.K,self.scaling_dim) # (B, 16*16*16, K, 2)
-        rotation = rotation.view(B,-1,self.K,self.rotation_dim) # (B, 16*16*16, K, 4)
-        offset = offset.view(B,-1,self.K,3) # (B, 16*16*16, K, 3)
+        sh = sh.view(B,R,R,R,self.K,self.sh_dim//3,3) # (B, 16 , 16, 16, K, 4, 3)
+        opacity = opacity.view(B,R,R,R,self.K,self.opacity_dim) # (B, 16, 16, 16, K, 1)
+        scaling = scaling.view(B,R,R,R,self.K,self.scaling_dim) # (B, 16, 16, 16, K, 2)
+        rotation = rotation.view(B,R,R,R,self.K,self.rotation_dim) # (B, 16, 16, 16, K, 4)
+        offset = offset.view(B,R,R,R,self.K,3) # (B, 16, 16, 16, K, 3)
         
         return offset, sh, scaling, rotation, opacity
         # return sh, scaling, rotation, opacity
@@ -771,8 +771,8 @@ class Network(L.LightningModule):
 
         # parameters initialization
         self.opacity_shift = -2.1792 # -2.15
-        self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
-        # self.scaling_shift = -4
+        # self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
+        self.scaling_shift = -4
 
         # # VAE
         # self.specs = specs
@@ -812,7 +812,7 @@ class Network(L.LightningModule):
         #self.point_emb = nn.Parameter(torch.randn(self.n_ctx, 3), requires_grad=True)
 
         # triplane transformer
-        self.trip_emb = nn.Parameter(torch.randn(3*self.vol_embedding_dim, self.R*self.R), requires_grad=True)
+        self.trip_emb = nn.Parameter(torch.randn(3, self.vol_embedding_dim, self.R, self.R), requires_grad=True)
         self.trip_transformer = TriplaneTokenTransformer(cfg=cfg, device="cuda", dtype=torch.float,
                                                                  n_ctx=cfg.triplane_e.n_ctx,
                                                                  width=cfg.triplane_e.width,
@@ -842,14 +842,14 @@ class Network(L.LightningModule):
             nn.Sigmoid()
         )
 
-        # learnable 2dgs parameters
-        self.r = self.R
-        self.offset = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 3), dtype=torch.float32)*0.78+0.16, requires_grad=True)
-        self.shs = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 4, 3), dtype=torch.float32), requires_grad=True)
-        self.scaling = nn.Parameter(torch.ones((self.r, self.r, self.r, self.K, 2), dtype=torch.float32)*0.72-4.0, requires_grad=True)
-        self.rotation = nn.Parameter(torch.rand((self.r, self.r, self.r, self.K, 4), dtype=torch.float32)*0.66-0.22, requires_grad=True)
-        opacity = inverse_sigmoid(0.1 * torch.ones((self.r, self.r, self.r, self.K, 1), dtype=torch.float32))
-        self.opacity = nn.Parameter(opacity, requires_grad=True)
+        # # learnable parameters
+        # self.r = self.R
+        # self.offset = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 3), dtype=torch.float32)*0.78+0.16, requires_grad=True)
+        # self.shs = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 4, 3), dtype=torch.float32), requires_grad=True)
+        # self.scaling = nn.Parameter(torch.ones((self.r, self.r, self.r, self.K, 2), dtype=torch.float32)*0.72-4.0, requires_grad=True)
+        # self.rotation = nn.Parameter(torch.rand((self.r, self.r, self.r, self.K, 4), dtype=torch.float32)*0.66-0.22, requires_grad=True)
+        # opacity = inverse_sigmoid(0.1 * torch.ones((self.r, self.r, self.r, self.K, 1), dtype=torch.float32))
+        # self.opacity = nn.Parameter(opacity, requires_grad=True)
 
     def build_dense_grid(self, reso):
         array = torch.arange(reso, device=self.device)
@@ -1293,7 +1293,7 @@ class Network(L.LightningModule):
         replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
         gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
         
-        input_trip_token = self.trip_emb.unsqueeze(0).expand(B*N, -1, -1) # (B*N, 3*C_proj, R*R) -> (B*N, 3*128, 256)
+        input_trip_token = self.trip_emb.reshape(-1, self.R*self.R).unsqueeze(0).expand(B*N, -1, -1) # (B*N, 3*C_proj, R*R) -> (B*N, 3*128, 256)
 
         # pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
         pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
@@ -1305,10 +1305,10 @@ class Network(L.LightningModule):
         # feat_vol_upsampled = self.upsample(feat_vol)
 
         pred_volume = self.vol_classifier(feat_vol.permute(0, 2, 3, 4, 1)).squeeze(-1) # (B*N, 16, 16, 16)
-        volume_feature = feat_vol.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim) # (B*N, 16*16*16, 128)
-        # volume_feature = feat_vol_upsampled.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim)
+        volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 16, 16, 16, 128)
+        # volume_feature = feat_vol.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim)
         # feat_mask = torch.round(gt_volume).reshape(B*N, -1) # (B*N, 16*16*16)
-        feat_mask = torch.round(gt_volume) # (B*N, 16, 16, 16)
+        feat_mask = torch.round(pred_volume) # (B*N, 16, 16, 16)
 
         # vae_input = proj_feat.reshape(B,-1,3,self.R,self.R).permute(0,2,1,3,4) #B,3,C_proj,R,R
         # vae_input = vae_input.reshape(B,-1,self.R,self.R) #B,3*C_proj,R,R
@@ -1336,20 +1336,14 @@ class Network(L.LightningModule):
         # volume_feat_up = self.vol_decoder(feat_vol)
 
         # rendering
-        # _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift)
+        _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, self.R)
         # _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(feat_vol, self.opacity_shift, self.scaling_shift)
 
-        # _offset_coarse = self.offset.reshape(self.r**3, 4, 3).unsqueeze(0).expand(B*N, -1, -1, -1)
-        # _shs_coarse = self.shs.reshape(self.r**3, 4, 4, 3).unsqueeze(0).expand(B*N, -1, -1, -1, -1)
-        # _scaling_coarse = self.scaling.reshape(self.r**3, 4, 2).unsqueeze(0).expand(B*N, -1, -1, -1)
-        # _rotation_coarse = self.rotation.reshape(self.r**3, 4, 4).unsqueeze(0).expand(B*N, -1, -1, -1)
-        # _opacity_coarse = self.opacity.reshape(self.r**3, 4, 1).unsqueeze(0).expand(B*N, -1, -1, -1)
-
-        _offset_coarse = self.offset.unsqueeze(0).expand(B*N, *self.offset.shape)
-        _shs_coarse = self.shs.unsqueeze(0).expand(B*N, *self.shs.shape)
-        _scaling_coarse = self.scaling.unsqueeze(0).expand(B*N, *self.scaling.shape)
-        _rotation_coarse = self.rotation.unsqueeze(0).expand(B*N, *self.rotation.shape)
-        _opacity_coarse = self.opacity.unsqueeze(0).expand(B*N, *self.opacity.shape)
+        # _offset_coarse = self.offset.unsqueeze(0).expand(B*N, *self.offset.shape)
+        # _shs_coarse = self.shs.unsqueeze(0).expand(B*N, *self.shs.shape)
+        # _scaling_coarse = self.scaling.unsqueeze(0).expand(B*N, *self.scaling.shape)
+        # _rotation_coarse = self.rotation.unsqueeze(0).expand(B*N, *self.rotation.shape)
+        # _opacity_coarse = self.opacity.unsqueeze(0).expand(B*N, *self.opacity.shape)
 
         # convert to local positions
         # if prex == 'train':
@@ -1358,7 +1352,7 @@ class Network(L.LightningModule):
         #     centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3) # (B*N, 1024*2, 3), gt_pc
         # centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3)
         
-        _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16*16*16, K, 3))
+        _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16, 16, 16, K, 3))
 
         # _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B, 1024*2)
         # masks =  _opacity_coarse_tmp > 0.5
@@ -1375,17 +1369,17 @@ class Network(L.LightningModule):
 
             mask = feat_mask[i]
 
-            _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
-            _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
-            _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
-            _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
-            _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
+            # _centers = _centers_coarse[i][mask==1.].view(-1, *_centers_coarse.shape[5:])
+            # _shs = _shs_coarse[i][mask==1.].view(-1, *_shs_coarse.shape[5:])
+            # _opacity = _opacity_coarse[i][mask==1.].view(-1, *_opacity_coarse.shape[5:])
+            # _scaling = _scaling_coarse[i][mask==1.].view(-1, *_scaling_coarse.shape[5:])
+            # _rotation = _rotation_coarse[i][mask==1.].view(-1, *_rotation_coarse.shape[5:])
 
-            # _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
-            # _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
-            # _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
-            # _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
-            # _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
+            _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
+            _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
+            _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
+            _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
+            _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
 
             if return_buffer:
                 render_pkg.append((_centers, _shs, _opacity, _scaling, _rotation))
@@ -1410,7 +1404,7 @@ class Network(L.LightningModule):
         if return_buffer:
             outputs.update({'render_pkg':render_pkg}) 
         
-        # outputs.update({'feat_vol':feat_vol.detach()})
+        outputs.update({'feat_vol':feat_vol.detach()})
         # outputs.update({'scaling_coarse':_scaling_coarse})
         # outputs.update({'center_coarse':_centers_coarse})
         outputs.update({'volume_mask':feat_mask})
