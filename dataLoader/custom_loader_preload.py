@@ -100,7 +100,10 @@ class custom_loader_preload(torch.utils.data.Dataset):
         occupancy_grid = self.pcd_voxelization(points, self.voxel_reso)
         inputs.update({'gt_volume': occupancy_grid})
 
-        cam_params = np.load(f"{instance}/cam_params.npz")
+        # cam_params = np.load(f"{instance}/cam_params.npz")
+        with h5py.File(os.path.join(instance, "cam_params.h5"), "r") as f:
+            cam_params = {key: f[key][:] for key in f.keys()}
+
         rgbs, nrms, c2ws = {}, {}, {}
         for idx in range(self.n_scenes):
             rgbs.update({f'rgb_{idx}': np.array(cam_params[f'rgb_{idx}'])[..., :3]})

@@ -68,8 +68,8 @@ class Losses(nn.Module):
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
                 # loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
-                loss += color_loss_all.mean()*10e4
-                # loss += color_loss_all.mean()
+                # loss += color_loss_all.mean()*10e4
+                loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
                     torch.log(torch.Tensor([10.]).to(color_loss_all.device))
@@ -123,7 +123,6 @@ class Losses(nn.Module):
                     loss_vol = weighted_bce_loss(pred_volume, gt_volume, positive_weight)
                     # loss += loss_vol*0.2
                     # loss = loss_vol*10
-                
                     scalar_stats.update({f'classification BCE': loss_vol.detach()})
                 else:
                     raise NotImplementedError("There's no predicted occupance volume in the output!!!")

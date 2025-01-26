@@ -62,7 +62,7 @@ triplane_e:
 train_dataset:
     dataset_name: custom_preload # shapenet_temp housecat6d
     # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_renders
+    data_root: /home/q672126/project/omni3d/train #/home/q672126/project/anything6d/gso_renders
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
@@ -76,7 +76,7 @@ train_dataset:
 test_dataset:
     dataset_name: custom_preload # shapenet_temp housecat6d
     # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_val
+    data_root: /home/q672126/project/omni3d/val #/home/q672126/project/anything6d/gso_val
     split: test
     img_size: [420, 420]
     n_group: ${n_views}
@@ -88,8 +88,8 @@ test_dataset:
     labelling_dimension: 128
 
 train:
-    batch_size: 4
-    lr: 1e-2
+    batch_size: 1
+    lr: 1e-4
     beta1: 0.9
     beta2: 0.95
     weight_decay: 0.05
@@ -102,7 +102,7 @@ train:
     start_feat: 0 #2000
     use_rand_views: False
 test:
-    batch_size: 4
+    batch_size: 1
 
 logger: 
     name: wandb

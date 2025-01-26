@@ -1295,8 +1295,8 @@ class Network(L.LightningModule):
         
         input_trip_token = self.trip_emb.reshape(-1, self.R*self.R).unsqueeze(0).expand(B*N, -1, -1) # (B*N, 3*C_proj, R*R) -> (B*N, 3*128, 256)
 
-        # pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
-        pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
+        pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
+        # pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
 
         pred_proj_feat_list = pred_proj_feat.reshape(B*N, -1, self.vol_embedding_dim, 3) # (B*N, R*R, 128, 3)
         pred_proj_feat_list = [pred_proj_feat_list[...,i] for i in range(3)] # (List[(B*N, R*R, 128)]*3)
