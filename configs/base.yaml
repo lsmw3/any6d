@@ -30,7 +30,7 @@ model:
 
     img_feats_avg: True
 
-    # ckpt_path: /home/q672126/project/anything6d/LaRa/logs/LaRa/release-test/pcd_render_epoch=499-v1.ckpt # specify a ckpt path if you want to continue training  
+    ckpt_path: logs/LaRa/release-test/vol_render_epoch=599.ckpt # specify a ckpt path if you want to continue training  
 
 # point_e:
 #     cond_drop_prob: 0.1
@@ -49,7 +49,7 @@ triplane_e:
     cond_drop_prob: 0.1
     heads: 8
     init_scale: 0.25
-    layers: 3
+    layers: 6
     n_ctx: 256
     embedding_channels: 128
     input_channels: 384
@@ -57,7 +57,7 @@ triplane_e:
     time_token_cond: True
     token_cond: True
     width: 256
-    dit_block_depth: 2
+    dit_block_depth: 4
 
 train_dataset:
     dataset_name: custom # shapenet_temp housecat6d
@@ -88,7 +88,7 @@ test_dataset:
     labelling_dimension: 128
 
 train:
-    batch_size: 6
+    batch_size: 4
     lr: 1e-4
     beta1: 0.9
     beta2: 0.95
@@ -98,11 +98,11 @@ train:
     n_epoch: 30000
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
-    check_val_every_n_epoch: 500
+    check_val_every_n_epoch: 150
     start_feat: 0 #2000
     use_rand_views: False
 test:
-    batch_size: 6
+    batch_size: 4
 
 logger: 
     name: wandb

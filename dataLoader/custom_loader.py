@@ -88,8 +88,8 @@ class custom_loader(torch.utils.data.Dataset):
         position = np.arange(num_objects)[:, np.newaxis]
         div_term = np.exp(-np.arange(0, dimension) * (np.log(10000.0) / dimension))
         encoding = np.zeros((num_objects, dimension), dtype=np.float32)
-        encoding[:, 0::2] = np.sin(position * div_term[0::2])  # Apply sine to even indices
-        encoding[:, 1::2] = np.cos(position * div_term[1::2])  # Apply cosine to odd indices
+        encoding[:, 0::2] = np.sin(position * div_term[0::2]) # Apply sine to even indices
+        encoding[:, 1::2] = np.cos(position * div_term[1::2]) # Apply cosine to odd indices
 
         return encoding.tolist()
 

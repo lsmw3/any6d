@@ -106,7 +106,7 @@ def main(cfg, specs):
         my_system, 
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
-        # ckpt_path=cfg.model.ckpt_path
+        ckpt_path=cfg.model.ckpt_path
         )
     
     dt = datetime.now() - t0
