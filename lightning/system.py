@@ -109,7 +109,7 @@ class system(L.LightningModule):
             self.vis_volume(output, prex='train')
 
         # if 0 == self.trainer.global_step % 5  and (self.trainer.local_rank == 0):
-        #     self.vis_pc(output, prex='train'
+        #     self.vis_pc(output, prex='train')
             
         torch.cuda.empty_cache()
 
