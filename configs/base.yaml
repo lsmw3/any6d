@@ -30,7 +30,7 @@ model:
 
     img_feats_avg: True
 
-    ckpt_path: logs/LaRa/release-test/vol_render_epoch=599.ckpt # specify a ckpt path if you want to continue training  
+    # ckpt_path: logs/LaRa/release-test/vol_render_epoch=599.ckpt # specify a ckpt path if you want to continue training  
 
 # point_e:
 #     cond_drop_prob: 0.1
@@ -60,9 +60,9 @@ triplane_e:
     dit_block_depth: 4
 
 train_dataset:
-    dataset_name: custom # shapenet_temp housecat6d
+    dataset_name: custom_preload # shapenet_temp housecat6d
     # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/train #/home/q672126/project/anything6d/gso_renders
+    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_renders
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
@@ -72,11 +72,12 @@ train_dataset:
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
+    max_occlusion_ratio: 0.9
 
 test_dataset:
-    dataset_name: custom # shapenet_temp housecat6d
+    dataset_name: custom_preload # shapenet_temp housecat6d
     # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/val #/home/q672126/project/anything6d/gso_val
+    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_val
     split: test
     img_size: [420, 420]
     n_group: ${n_views}
@@ -86,6 +87,7 @@ test_dataset:
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
+    max_occlusion_ratio: 0.9
 
 train:
     batch_size: 4
@@ -98,11 +100,13 @@ train:
     n_epoch: 30000
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
-    check_val_every_n_epoch: 150
-    start_feat: 0 #2000
+    check_val_every_n_epoch: 20
+    log_train_every_n_step: 20
+    start_save: 0
     use_rand_views: False
 test:
     batch_size: 4
+    log_val_every_n_step: 1
 
 logger: 
     name: wandb

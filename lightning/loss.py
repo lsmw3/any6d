@@ -15,10 +15,6 @@ def weighted_bce_loss(pred, target, positive_weight):
     targets: Ground truth, binary labels (0 or 1), shape (B, ...)
     pos_weight: Weight for positive samples (y=1), scalar or tensor
     """
-    # loss = F.binary_cross_entropy_with_logits(
-    #     logits, targets, pos_weight=pos_weight, reduction='mean'
-    # )
-
     assert pred.shape == target.shape, "Pred and GT volumes must have the same shape"
 
     weight = torch.ones_like(target)
@@ -44,7 +40,7 @@ class Losses(nn.Module):
         masked_cos = cos[mask.squeeze(-1) == 1]
         return (1 - masked_cos[masked_cos < np.cos(thrsh)]).mean()
 
-    def forward(self, batch, output, iter, start_feat):
+    def forward(self, batch, output, iter):
 
         scalar_stats = {}
         loss = 0
@@ -54,9 +50,9 @@ class Losses(nn.Module):
         
         # B,V,H,W = batch['mask'].shape
         mask = batch['mask'].permute(0,2,1,3).reshape(B,H,V*W).unsqueeze(-1)
-        volume_mask = output['volume_mask'].to(torch.uint8)
-        valid_counts = volume_mask.sum(dim=1)
-        optimize_gaussian = valid_counts.min().item() > 10
+        # volume_mask = output['volume_mask'].to(torch.uint8)
+        # valid_counts = volume_mask.sum(dim=1)
+        # optimize_gaussian = valid_counts.min().item() > 10
             
         if 'image' in output:
 
@@ -68,8 +64,7 @@ class Losses(nn.Module):
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
                 # loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
-                # loss += color_loss_all.mean()*10e4
-                loss += color_loss_all.mean()*10
+                loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
                     torch.log(torch.Tensor([10.]).to(color_loss_all.device))
@@ -81,10 +76,6 @@ class Losses(nn.Module):
                 with autocast(enabled=False): 
                     ssim_val = self.ssim(output[f'image{prex}'].permute(0,3,1,2), tar_rgb.permute(0,3,1,2))
                     scalar_stats.update({f'ssim{prex}': ssim_val.detach()})
-                    # if with_fine:
-                    #     loss += 0.02 * (1-ssim_val)
-                    # else:
-                    #     loss += 0.005 * (1-ssim_val)
                     loss += 0.02 * (1-ssim_val)
                 
                 if f'rend_dist{prex}' in output and prex!='_fine': #and iter>1000:
@@ -115,16 +106,16 @@ class Losses(nn.Module):
                 #     else:
                 #         raise NotImplementedError("There's no predicted point cloud in the output!!!")
 
-                if 'pred_volume' in output:
-                    gt_volume = output['gt_volume']#.reshape(B, -1)
-                    pred_volume = output['pred_volume']#.reshape(B, -1)
-                    positive_weight = 10
-                    # loss_vol = nn.BCELoss()(pred_volume, gt_volume)
-                    # loss_vol = weighted_bce_loss(pred_volume, gt_volume, positive_weight)
-                    # loss += loss_vol*0.2
-                    # loss = loss_vol*10
-                    # scalar_stats.update({f'classification BCE': loss_vol.detach()})
-                else:
-                    raise NotImplementedError("There's no predicted occupance volume in the output!!!")
+                # if 'pred_volume' in output:
+                #     gt_volume = output['gt_volume']#.reshape(B, -1)
+                #     pred_volume = output['pred_volume']#.reshape(B, -1)
+                #     positive_weight = 10
+                #     loss_vol = nn.BCELoss()(pred_volume, gt_volume)
+                #     loss_vol = weighted_bce_loss(pred_volume, gt_volume, positive_weight)
+                #     loss += loss_vol*0.2
+                #     loss = loss_vol*10
+                #     scalar_stats.update({f'classification BCE': loss_vol.detach()})
+                # else:
+                #     raise NotImplementedError("There's no predicted occupance volume in the output!!!")
      
         return loss, scalar_stats

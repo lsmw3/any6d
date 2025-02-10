@@ -72,13 +72,13 @@ def main(cfg, specs):
     
     # Set up ModelCheckpoint callback
     checkpoint_callback = CustomModelCheckpoint(
-        save_after_epoch=cfg.train.start_feat,
+        save_after_epoch=cfg.train.start_save,
         dirpath=cfg.logger.dir,        # Path where checkpoints will be saved
         filename='vol_render_{epoch}',        # Filename for the checkpoints
         monitor='val loss',
         # save_last=True,
         save_top_k=1,             # Set to -1 to save all checkpoints
-        every_n_epochs=cfg.train.check_val_every_n_epoch,          # Save a checkpoint every K epochs
+        every_n_epochs=500000,          # cfg.train.check_val_every_n_epoch
         save_on_train_epoch_end=True,  # Ensure it saves at the end of an epoch, not the beginning
     )
 
@@ -106,7 +106,7 @@ def main(cfg, specs):
         my_system, 
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
-        ckpt_path=cfg.model.ckpt_path
+        # ckpt_path=cfg.model.ckpt_path
         )
     
     dt = datetime.now() - t0

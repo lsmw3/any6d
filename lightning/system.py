@@ -26,90 +26,28 @@ class system(L.LightningModule):
         self.loss = Losses()
         self.net = Network(cfg,specs)
 
-        self.validation_step_outputs = []
+        # self.validation_step_outputs = []
 
         self.data_loading_times = []
         self.training_step_times = []
 
-    # def dynamic_vol_grad_adjustment(self):
-    #     for attr in ['pc_emb', 'pc_transformer', 'positional_label_encoder']: # 'clip_labelling_ln'
-    #         if hasattr(self.net, attr):
-    #             freeze = self.current_epoch>self.cfg.train.start_feat
-    #             module = getattr(self.net, attr)
-    #             if isinstance(module, nn.Parameter):
-    #                 module.requires_grad = not freeze
-    #             elif isinstance(module, nn.Module):
-    #                 for param in module.parameters():
-    #                     param.requires_grad = not freeze
-    #             else:
-    #                 raise TypeError(f"Unsupported attribute type for {attr}: {type(module)}")
-
-    # def on_train_epoch_start(self):
-    #     self.dynamic_vol_grad_adjustment()
-
-    # def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
-    #     self.batch_start_time = time.time()
-
-    # def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-    #     data_loading_time = time.time() - self.batch_start_time
-    #     self.data_loading_times.append(data_loading_time)
-    #     self.batch_start_time = time.time()  # Reset for the next batch
-
-    # def on_train_epoch_end(self):
-    #     avg_data_loading_time = sum(self.data_loading_times) / len(self.data_loading_times)
-    #     avg_training_step_time = sum(self.training_step_times) / len(self.training_step_times)
-    #     print(f"Avg Data Loading Time: {avg_data_loading_time:.4f}s")
-    #     print(f"Avg Training Step Time: {avg_training_step_time:.4f}s")
-    #     self.data_loading_times.clear()
-    #     self.training_step_times.clear()
-
-    # def on_before_optimizer_step(self, optimizer):
-    #     for name, param in self.named_parameters():
-    #         if 'shs' in name or 'offset' in name or 'scaling' in name:
-    #             print("before:", name, param.clone()[torch.where(param.grad != 0)])
-
-    # def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
-    #     for name, param in self.named_parameters():
-    #         if 'shs' in name or 'offset' in name or 'scaling' in name:
-    #             print("after:", name, param.clone()[torch.where(param.grad != 0)])
+        self.total_val_steps = 0
 
     def training_step(self, batch, batch_idx):
-        # start_time = time.time()
         self.net.train()
-        # torch.autograd.set_detect_anomaly(True)
-        output = self.net(batch, start_feat=self.current_epoch>self.cfg.train.start_feat)
-        # self.training_step_times.append(time.time() - start_time)
-        loss, scalar_stats = self.loss(batch, output, self.global_step, start_feat=self.current_epoch>self.cfg.train.start_feat)
-        # #mask = output['masks']
-        # #scaling = output['scaling_coarse']
-        # #scaling_sel = scaling[mask>0].reshape(-1,2) #B,N,2 -> BN,2
-        # #isotropic_loss = torch.abs(scaling_sel - scaling_sel.mean(dim=1,keepdim=True)).mean()
-        # #loss += 0.5 * isotropic_loss
+        output = self.net(batch)
+        loss, scalar_stats = self.loss(batch, output, self.global_step)
 
         for key, value in scalar_stats.items():
             if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm']:
                 self.log(f'train/{key}', value)
 
         self.logger.experiment.log({'lr':self.trainer.optimizers[0].param_groups[0]['lr']})
-        # self.log('lr', self.trainer.optimizers[0].param_groups[0]['lr'])
-        
-        # self.logger.experiment.log({'2dgs loss': loss})
-        
-        # vae_outputs = output['vae_output']
-        # vae_inputs = output['proj_feat']
-        # loss_ae = 0.1*torch.nn.functional.mse_loss(vae_inputs,vae_outputs)
-        # self.logger.experiment.log({'vae loss': loss_ae})
 
-        # loss += loss_ae
-        # self.log('train loss', loss)
-
-        if 0 == self.trainer.global_step % 300  and (self.trainer.local_rank == 0):
+        if 0 == self.trainer.global_step % self.cfg.train.log_train_every_n_step and (self.trainer.local_rank == 0):
             self.vis_results(output, batch, prex='train')
             self.vis_results_aux(output, batch, prex='train')
-            self.vis_volume(output, prex='train')
-
-        # if 0 == self.trainer.global_step % 5  and (self.trainer.local_rank == 0):
-        #     self.vis_pc(output, prex='train')
+            # self.vis_volume(output, prex='train')
             
         torch.cuda.empty_cache()
 
@@ -117,36 +55,35 @@ class system(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.net.eval()
-        output = self.net(batch, start_feat=self.current_epoch>self.cfg.train.start_feat)
-        loss, scalar_stats = self.loss(batch, output, self.global_step, start_feat=self.current_epoch>self.cfg.train.start_feat)
-        # if batch_idx == 0 and (self.trainer.local_rank == 0):
-        #     self.vis_results(output, batch, prex='val')
-        # if batch_idx == 0:
-        #     self.vis_pc(output, prex='val')
-        #     self.vis_results_aux(output, batch)
+        output = self.net(batch)
+        loss, scalar_stats = self.loss(batch, output, self.global_step)
 
-        self.vis_results(output, batch, prex='val')
-        
-        # self.vis_pc(output, prex='val')
-        self.vis_results_aux(output, batch, prex='val')
+        for key, value in scalar_stats.items():
+            prog_bar = True if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm'] else False
+            self.log(f'val/{key}', value, prog_bar=prog_bar, sync_dist=True)
 
-        self.vis_volume(output, prex='val')
-
-        self.validation_step_outputs.append(scalar_stats)
+        if 0 == self.total_val_steps % self.cfg.test.log_val_every_n_step:
+            self.vis_results(output, batch, prex='val')
+            self.vis_results_aux(output, batch, prex='val')
+            # self.validation_step_outputs.append(scalar_stats)
         
         self.log('val loss', loss)
+
+        self.total_val_steps += 1
+
+        torch.cuda.empty_cache()
         
         return loss
 
-    def on_validation_epoch_end(self):
-        keys = self.validation_step_outputs[0]
-        for key in keys:
-            prog_bar = True if key in ['psnr','mask','depth','classification BCE'] else False
-            metric_mean = torch.stack([x[key] for x in self.validation_step_outputs]).mean()
-            self.log(f'val/{key}', metric_mean, prog_bar=prog_bar, sync_dist=True)
+    # def on_validation_epoch_end(self):
+    #     keys = self.validation_step_outputs[0]
+    #     for key in keys:
+    #         prog_bar = True if key in ['psnr','mask','depth','classification BCE'] else False
+    #         metric_mean = torch.stack([x[key] for x in self.validation_step_outputs]).mean()
+    #         self.log(f'val/{key}', metric_mean, prog_bar=prog_bar, sync_dist=True)
 
-        self.validation_step_outputs.clear()  # free memory
-        torch.cuda.empty_cache()
+    #     self.validation_step_outputs.clear()  # free memory
+    #     torch.cuda.empty_cache()
 
 
     def vis_results_aux(self,output,batch, prex):
@@ -155,37 +92,6 @@ class system(L.LightningModule):
         
         B,V,H,W,C = gt_rgb.shape
         output_rgb = output_rgb.reshape(B, H, V, W, C).transpose(0, 2, 1, 3, 4)
-
-        # # log the gt rgb and output
-        # for idx in range(B):
-        #     log_dict = {
-        #         f"Ground Truth {prex} {idx}": [wandb.Image(img, caption=f"Ground Truth {idx}") for img in gt_rgb[idx]],
-        #         f"Model Output {prex} {idx}": [wandb.Image(img, caption=f"Model Output {idx}") for img in output_rgb[idx]]
-        #     }
-        #     self.logger.experiment.log(log_dict)
-
-        # log the volumn
-        # masks = output['masks']
-        # V_inps = masks.shape[0] // B
-
-        # masks = masks.reshape(B, V_inps, -1).detach().cpu().numpy()
-        # center_coarse = output['center_coarse']
-        # center_coarse = center_coarse.reshape(B, V_inps, -1, 3).detach().cpu().numpy()
-        
-        # for i in range(B):
-        #     # semantic_figs = []
-        #     pc_figs = []
-        #     for j in range(V_inps):
-        #         # semantic_fig = visualize_voxel_with_pca(feat_vol[i, j])
-        #         pc_fig = visualize_center_coarse(center_coarse[i, j],masks[i, j])
-        #         # semantic_figs.append(semantic_fig)
-        #         pc_figs.append(pc_fig)
-
-        #     log_dict = {
-        #         # f"semantic_input_{prex}_{i}": [wandb.Image(semantic_fig, caption=f"semantic_fig{i}.png") for semantic_fig in semantic_figs],
-        #         f"output_pc_{prex}_{i}": [wandb.Image(pc_fig, caption=f"pc_fig{i}.png") for pc_fig in pc_figs]
-        #     }
-        #     self.logger.experiment.log(log_dict)
 
         # log triplane projection
         proj_feats_vis = output['proj_feats_vis']
@@ -224,37 +130,37 @@ class system(L.LightningModule):
                 self.logger.log_image(f'{prex}/{key}', imgs, step=self.global_step)
         self.net.train()
 
-    def vis_volume(self, output, prex):
-        pred_volume = output['pred_volume'].detach().cpu().numpy()
-        gt_volume = output['gt_volume'].detach().cpu().numpy()
+    # def vis_volume(self, output, prex):
+    #     pred_volume = output['pred_volume'].detach().cpu().numpy()
+    #     gt_volume = output['gt_volume'].detach().cpu().numpy()
 
-        batch, num_views = gt_volume.shape[0] // self.cfg.n_views, self.cfg.n_views
-        for i in range(batch):
-            vis_pred_vols = []  # Store prediction paths for later logging
-            for j in range(num_views):
-                pred_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/pred_vol_{j}.png')
+    #     batch, num_views = gt_volume.shape[0] // self.cfg.n_views, self.cfg.n_views
+    #     for i in range(batch):
+    #         vis_pred_vols = []  # Store prediction paths for later logging
+    #         for j in range(num_views):
+    #             pred_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/pred_vol_{j}.png')
 
-                if j == 0:  # Only save GT once per batch
-                    gt_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/gt_vol.png')
-                    visualize_volume_with_cubes(gt_volume[i * num_views + j], gt_path) # Save the ground truth PC image
+    #             if j == 0:  # Only save GT once per batch
+    #                 gt_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/gt_vol.png')
+    #                 visualize_volume_with_cubes(gt_volume[i * num_views + j], gt_path) # Save the ground truth PC image
 
-                visualize_volume_with_cubes(pred_volume[i * num_views + j], pred_path) # Save the predicted PC image
-                vis_pred_vols.append(pred_path)  # Append the path to visualize later
+    #             visualize_volume_with_cubes(pred_volume[i * num_views + j], pred_path) # Save the predicted PC image
+    #             vis_pred_vols.append(pred_path)  # Append the path to visualize later
 
-            # Load the saved images using plt.imread
-            gt_img = plt.imread(gt_path)  # Load the saved ground truth image
-            pred_imgs = [plt.imread(p) for p in vis_pred_vols]  # Load all prediction images
+    #         # Load the saved images using plt.imread
+    #         gt_img = plt.imread(gt_path)  # Load the saved ground truth image
+    #         pred_imgs = [plt.imread(p) for p in vis_pred_vols]  # Load all prediction images
 
-            # Combine GT and predicted images in a grid (e.g., GT and 4 predictions)
-            combined_image = np.concatenate([gt_img] + pred_imgs, axis=1)  # Concatenate images horizontally
+    #         # Combine GT and predicted images in a grid (e.g., GT and 4 predictions)
+    #         combined_image = np.concatenate([gt_img] + pred_imgs, axis=1)  # Concatenate images horizontally
 
-            # Prepare dictionary for WandB logging
-            log_dict = {
-                f"{prex}_vol_{i}": wandb.Image(combined_image, caption=f"{prex} gt and pred for occupancy volume {i}")
-            }
+    #         # Prepare dictionary for WandB logging
+    #         log_dict = {
+    #             f"{prex}_vol_{i}": wandb.Image(combined_image, caption=f"{prex} gt and pred for occupancy volume {i}")
+    #         }
 
-            # Log the combined image (GT and its predictions) to WandB
-            self.logger.experiment.log(log_dict)
+    #         # Log the combined image (GT and its predictions) to WandB
+    #         self.logger.experiment.log(log_dict)
 
     def num_steps(self) -> int:
         """Get number of steps"""

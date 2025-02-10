@@ -2,3 +2,4 @@ logs/
 wandb/
 temp_test/
 ckpt/
+temp.ipynb

@@ -9,7 +9,7 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 from collections import defaultdict
 import h5py
-import time
+import cv2
 
 def fov_to_ixt(fov, reso):
     ixt = np.eye(3, dtype=np.float32)
@@ -45,9 +45,6 @@ class custom_loader(torch.utils.data.Dataset):
             else:
                 self.instances.extend(label_instances)
 
-        # self.instances = [os.path.join(data_root, instance_name) for instance_name in label_names]
-        # self.instances = {}
-
         self.n_group = cfg.n_group # 1
         self.n_scenes = cfg.n_scenes # 208
 
@@ -61,8 +58,7 @@ class custom_loader(torch.utils.data.Dataset):
 
         view_ids = range(self.n_scenes)
         
-        # cam_params = np.load(f"{instance}/cam_params.npz") # 0.0055s
-        
+        # cam_params = np.load(f"{instance}/cam_params.npz")
         with h5py.File(os.path.join(instance, "cam_params.h5"), "r") as f:
             cam_params = {key: f[key][:] for key in f.keys()}
 
@@ -94,7 +90,7 @@ class custom_loader(torch.utils.data.Dataset):
         return encoding.tolist()
 
     def get_input(self, instance, cam_params, view_id):
-        tar_img, bg_colors, tar_nrms, tar_c2ws, tar_w2cs, tar_ixts, tar_masks, volume = self.read_views(instance, cam_params, view_id)
+        tar_img, tar_occluded_img, bg_colors, tar_nrms, tar_c2ws, tar_w2cs, tar_ixts, tar_masks, volume = self.read_views(instance, cam_params, view_id)
 
         # align cameras using first view
         # no inverse operation 
@@ -115,6 +111,7 @@ class custom_loader(torch.utils.data.Dataset):
                     'tar_w2c': tar_w2cs,
                     'tar_ixt': tar_ixts,
                     'tar_rgb': tar_img,
+                    'tar_occluded_rgb': tar_occluded_img,
                     'mask': tar_masks,
                     'transform_mats': transform_mats,
                     'bg_color': bg_colors,
@@ -138,7 +135,7 @@ class custom_loader(torch.utils.data.Dataset):
     def read_views(self, instance, cam_params, src_views):
         src_ids = src_views
         bg_colors = []
-        ixts, exts, w2cs, imgs, normals, masks = [], [], [], [], [], []
+        ixts, exts, w2cs, imgs, occluded_imgs, normals, masks = [], [], [], [], [], [], []
         
         for i, idx in enumerate(src_ids): # 0.0939s
             
@@ -149,8 +146,9 @@ class custom_loader(torch.utils.data.Dataset):
             # bg_color = np.ones(3).astype(np.float32)
 
             bg_colors.append(bg_color)
-            img, normal, mask = self.read_image(instance, idx, bg_color, cam_params) # 0.0280s
+            img, occluded_img, normal, mask = self.read_image(idx, bg_color, cam_params) # 0.0280s
             imgs.append(img)
+            occluded_imgs.append(occluded_img)
             ixt, ext, w2c = self.read_cam(cam_params, idx) # 0.0008s
             ixts.append(ixt)
             exts.append(ext)
@@ -164,7 +162,7 @@ class custom_loader(torch.utils.data.Dataset):
         occupancy_grid = self.pcd_voxelization(points, self.voxel_reso)
         # voxel_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=0.05)
 
-        return np.stack(imgs), np.stack(bg_colors), np.stack(normals), np.stack(exts), np.stack(w2cs), np.stack(ixts), np.stack(masks), occupancy_grid
+        return np.stack(imgs), np.stack(occluded_imgs), np.stack(bg_colors), np.stack(normals), np.stack(exts), np.stack(w2cs), np.stack(ixts), np.stack(masks), occupancy_grid
     
     def pcd_voxelization(self, point_cloud, resolution):
         points_scaled = (point_cloud + 1) * resolution / 2
@@ -193,12 +191,6 @@ class custom_loader(torch.utils.data.Dataset):
     def read_cam(self, cam_params, view_idx):
         c2w = np.array(cam_params[f'c2w_{view_idx}'], dtype=np.float32)
         
-        # camera_transform_matrix = np.eye(4)
-        # camera_transform_matrix[1, 1] *= -1
-        # camera_transform_matrix[2, 2] *= -1
-        
-        # c2w = c2w @ camera_transform_matrix
-        
         w2c = np.linalg.inv(c2w)
         
         w2c = np.array(w2c, dtype=np.float32)
@@ -208,24 +200,99 @@ class custom_loader(torch.utils.data.Dataset):
         ixt = fov_to_ixt(fov, self.img_size)
         return ixt, c2w, w2c
 
-    def read_image(self, instance, view_idx, bg_color, cam_params):
-        # img = np.array(Image.open(f"{instance}/rgb/image_{view_idx}.jpg"))[..., :3]
+    def read_image(self, view_idx, bg_color, cam_params):
         img = np.array(cam_params[f'rgb_{view_idx}'])[..., :3]
-        # mask = np.where(img < 255, 1, 0).astype(np.uint8)
         mask = np.ones_like(img, dtype=np.uint8)
         white_pixels = np.all(img == [255, 255, 255], axis=-1)
         mask[white_pixels] = [0, 0, 0]
-        
+
+        occluded_img = self.apply_occlusion(img, mask[:, :, 0], max_occlusion_ratio=self.cfg.max_occlusion_ratio)
+        occluded_mask = np.ones_like(occluded_img, dtype=np.uint8)
+        occluded_white_pixels = np.all(occluded_img == [255, 255, 255], axis=-1)
+        occluded_mask[occluded_white_pixels] = [0, 0, 0]
+
         img = img.astype(np.float32) / 255.
         img = (img * mask + (1 - mask) * bg_color).astype(np.float32)
+        
+        occluded_img = occluded_img.astype(np.float32) / 255.
+        occluded_img = (occluded_img * occluded_mask + (1 - occluded_mask) * bg_color).astype(np.float32)
         
         if self.cfg.load_normal:
             normal = np.array(cam_params[f'nrm_{view_idx}'], dtype=np.float32)
             norm = np.linalg.norm(normal, axis=-1, keepdims=True)
             normalized_normal = normal / norm
-            return img, normalized_normal.astype(np.float32), mask[:, :, 0].astype(np.uint8)
+            return img, occluded_img, normalized_normal.astype(np.float32), mask[:, :, 0].astype(np.uint8)
 
-        return img, None, mask[:, :, 0].astype(np.uint8)
+        return img, occluded_img, None, mask[:, :, 0].astype(np.uint8)
+    
+    def apply_occlusion(self, image, mask, max_occlusion_ratio):
+        # Ensure mask is binary
+        mask = (mask > 0).astype(np.uint8)
+
+        # Find object pixels
+        object_pixels = np.column_stack(np.where(mask == 1))
+        num_object_pixels = len(object_pixels)
+        if num_object_pixels == 0:
+            return image  # No object found
+
+        # Compute max occlusion area
+        max_occlusion_area = int(num_object_pixels * max_occlusion_ratio)
+
+        # Get bounding box of the object
+        x_coords, y_coords = object_pixels[:, 1], object_pixels[:, 0]
+        x_min, x_max = np.min(x_coords), np.max(x_coords)
+        y_min, y_max = np.min(y_coords), np.max(y_coords)
+
+        # Try generating a valid occlusion within the area limit
+        while True:
+            # Select an ellipse center inside the object
+            center_x = random.randint(x_min, x_max)
+            center_y = random.randint(y_min, y_max)
+
+            # Define random ellipse size within object bounds
+            axis_length_x = random.randint(int(0.2 * (x_max - x_min)), int(0.5 * (x_max - x_min)))
+            axis_length_y = random.randint(int(0.2 * (y_max - y_min)), int(0.5 * (y_max - y_min)))
+
+            # Calculate estimated occlusion area
+            estimated_area = np.pi * (axis_length_x / 2) * (axis_length_y / 2)
+
+            # If the area is too large, regenerate
+            if estimated_area <= max_occlusion_area:
+                break
+
+        # Generate a random rotation angle
+        angle = random.randint(0, 360)
+
+        # Randomly determine if it’s a full or partial occlusion (arc-like)
+        if random.random() > 0.5:
+            start_angle, end_angle = random.randint(0, 180), random.randint(180, 360)  # Partial occlusion
+        else:
+            start_angle, end_angle = 0, 360  # Full ellipse occlusion
+
+        # Get background color estimate
+        bg_color = np.median(image[mask == 0], axis=0)  # Estimate background color
+
+        # Draw the occlusion on a mask
+        occlusion_mask = np.zeros_like(mask)
+        cv2.ellipse(occlusion_mask, (center_x, center_y), (axis_length_x, axis_length_y), 
+                    angle, start_angle, end_angle, 1, thickness=-1)
+
+        # Ensure occlusion stays within the object
+        occlusion_mask = occlusion_mask & mask
+
+        # Check connectivity: object should remain one connected component
+        test_mask = mask.copy()
+        test_mask[occlusion_mask == 1] = 0
+        num_labels, _, _, _ = cv2.connectedComponentsWithStats(test_mask)
+
+        if num_labels > 2:  # More than 2 means the object is split
+            return image  # Skip this occlusion to keep the object connected
+
+        # Apply occlusion
+        occluded_image = image.copy()
+        occluded_image[occlusion_mask == 1] = bg_color
+
+        return occluded_image
 
 
     def __len__(self):

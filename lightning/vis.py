@@ -11,10 +11,11 @@ def vis_appearance_depth(output, batch):
     pred_rgb = output[f'image'].detach().cpu().numpy()
     pred_depth = output[f'depth'].detach().cpu().numpy()
     gt_rgb   = batch[f'tar_rgb'].permute(0,2,1,3,4).reshape(B, H, V*W, 3).detach().cpu().numpy()
+    gt_occluded_rgb   = batch[f'tar_occluded_rgb'].permute(0,2,1,3,4).reshape(B, H, V*W, 3).detach().cpu().numpy()
     
     near_far = batch['near_far'][0].tolist()
     pred_depth_colorlized = np.stack([visualize_depth_numpy(_depth, near_far) for _depth in pred_depth]).astype('float32')/255
-    outputs.update({f"gt_rgb":gt_rgb, f"pred_rgb":pred_rgb, f"pred_depth":pred_depth_colorlized})
+    outputs.update({f"gt_rgb":gt_rgb, f"gt_occluded_rgb":gt_occluded_rgb, f"pred_rgb":pred_rgb, f"pred_depth":pred_depth_colorlized})
     
 
     if 'rend_normal' in output:
