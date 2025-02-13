@@ -35,7 +35,7 @@ class system(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.net.train()
-        output = self.net(batch)
+        output = self.net(batch, with_fine=self.current_epoch>self.cfg.train.start_fine)
         loss, scalar_stats = self.loss(batch, output, self.global_step)
 
         for key, value in scalar_stats.items():
@@ -46,7 +46,7 @@ class system(L.LightningModule):
 
         if 0 == self.trainer.global_step % self.cfg.train.log_train_every_n_step and (self.trainer.local_rank == 0):
             self.vis_results(output, batch, prex='train')
-            self.vis_results_aux(output, batch, prex='train')
+            # self.vis_results_aux(output, batch, prex='train')
             # self.vis_volume(output, prex='train')
             
         torch.cuda.empty_cache()
@@ -55,7 +55,7 @@ class system(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.net.eval()
-        output = self.net(batch)
+        output = self.net(batch, with_fine=self.current_epoch>self.cfg.train.start_fine)
         loss, scalar_stats = self.loss(batch, output, self.global_step)
 
         for key, value in scalar_stats.items():
@@ -64,7 +64,7 @@ class system(L.LightningModule):
 
         if 0 == self.total_val_steps % self.cfg.test.log_val_every_n_step:
             self.vis_results(output, batch, prex='val')
-            self.vis_results_aux(output, batch, prex='val')
+            # self.vis_results_aux(output, batch, prex='val')
             # self.validation_step_outputs.append(scalar_stats)
         
         self.log('val loss', loss)
@@ -86,36 +86,36 @@ class system(L.LightningModule):
     #     torch.cuda.empty_cache()
 
 
-    def vis_results_aux(self,output,batch, prex):
-        output_rgb = output['image_fine'].detach().cpu().numpy() if 'image_fine' in output else output['image'].detach().cpu().numpy()
-        gt_rgb = batch['suv_rgb'].detach().cpu().numpy() if 'suv_rgb' in batch else batch['tar_rgb'].detach().cpu().numpy()
+    # def vis_results_aux(self,output,batch, prex):
+    #     output_rgb = output['image_fine'].detach().cpu().numpy() if 'image_fine' in output else output['image'].detach().cpu().numpy()
+    #     gt_rgb = batch['suv_rgb'].detach().cpu().numpy() if 'suv_rgb' in batch else batch['tar_rgb'].detach().cpu().numpy()
         
-        B,V,H,W,C = gt_rgb.shape
-        output_rgb = output_rgb.reshape(B, H, V, W, C).transpose(0, 2, 1, 3, 4)
+    #     B,V,H,W,C = gt_rgb.shape
+    #     output_rgb = output_rgb.reshape(B, H, V, W, C).transpose(0, 2, 1, 3, 4)
 
-        # log triplane projection
-        proj_feats_vis = output['proj_feats_vis']
-        N, D, C_proj = proj_feats_vis.shape
-        V_inps = N // B
-        proj_feats_vis = proj_feats_vis.reshape(B, V_inps, D, C_proj)
-        # agg_feats_vis = output['recon_feats_vis']
-        for idx in range(B):
-            R = 16
-            proj_feat_pca = []
-            for j in range(V_inps):
-                proj_feat_vis = vis_pca(proj_feats_vis[idx, j]).reshape(3,R,R,3)
-                input_triplane = image_grid(proj_feat_vis, rows=1, cols=3, rgb=True)
+    #     # log triplane projection
+    #     proj_feats_vis = output['proj_feats_vis']
+    #     N, D, C_proj = proj_feats_vis.shape
+    #     V_inps = N // B
+    #     proj_feats_vis = proj_feats_vis.reshape(B, V_inps, D, C_proj)
+    #     # agg_feats_vis = output['recon_feats_vis']
+    #     for idx in range(B):
+    #         R = 16
+    #         proj_feat_pca = []
+    #         for j in range(V_inps):
+    #             proj_feat_vis = vis_pca(proj_feats_vis[idx, j]).reshape(3,R,R,3)
+    #             input_triplane = image_grid(proj_feat_vis, rows=1, cols=3, rgb=True)
 
-                proj_feat_pca.append(input_triplane)
+    #             proj_feat_pca.append(input_triplane)
 
-            # proj_feat_vis = vis_pca(agg_feats_vis[i]).reshape(3,R,R,3)
-            # vae_triplane_fig =image_grid(proj_feat_vis, rows=1, cols=3, rgb=True)
+    #         # proj_feat_vis = vis_pca(agg_feats_vis[i]).reshape(3,R,R,3)
+    #         # vae_triplane_fig =image_grid(proj_feat_vis, rows=1, cols=3, rgb=True)
 
-            log_dict = {
-                f"Triplane_proj_{prex}_{idx}": [wandb.Image(input_triplane, caption=f"Triplane_proj {idx}") for input_triplane in proj_feat_pca],
-                # f"VAE_triplane_proj{idx}": wandb.Image(vae_triplane_fig, caption=f"VAE_triplane_proj {idx}")
-            }
-            self.logger.experiment.log(log_dict)
+    #         log_dict = {
+    #             f"Triplane_proj_{prex}_{idx}": [wandb.Image(input_triplane, caption=f"Triplane_proj {idx}") for input_triplane in proj_feat_pca],
+    #             # f"VAE_triplane_proj{idx}": wandb.Image(vae_triplane_fig, caption=f"VAE_triplane_proj {idx}")
+    #         }
+    #         self.logger.experiment.log(log_dict)
 
             
     def vis_results(self, output, batch, prex):

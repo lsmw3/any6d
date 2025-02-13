@@ -599,7 +599,7 @@ class Decoder(L.LightningModule):
         # offset = torch.sigmoid(offset)*2-1.0
 
         B = opacity.shape[0]
-        sh = sh.view(B,R,R,R,self.K,self.sh_dim//3,3) # (B, 16 , 16, 16, K, 4, 3)
+        sh = sh.view(B,R,R,R,self.K,self.sh_dim//3,3) # (B, 16, 16, 16, K, 4, 3)
         opacity = opacity.view(B,R,R,R,self.K,self.opacity_dim) # (B, 16, 16, 16, K, 1)
         scaling = scaling.view(B,R,R,R,self.K,self.scaling_dim) # (B, 16, 16, 16, K, 2)
         rotation = rotation.view(B,R,R,R,self.K,self.rotation_dim) # (B, 16, 16, 16, K, 4)
@@ -753,7 +753,7 @@ class Network(L.LightningModule):
         # self.register_buffer("volume_grid", self.build_dense_grid(self.feat_vol_reso))
         
         # grouping configuration
-        self.n_offset_groups = cfg.model.n_offset_groups # 16
+        self.n_offset_groups = cfg.model.vol_embedding_reso # 16
         self.register_buffer("group_centers", self.build_dense_grid(self.grid_reso))
         # self.group_centers = self.group_centers.reshape(1,-1,3)
         self.group_centers = self.group_centers.reshape(1,*self.group_centers.shape)
@@ -783,7 +783,7 @@ class Network(L.LightningModule):
         # self.vae_model = BetaVAE(in_channels=in_channels, latent_dim=modulation_dim, hidden_dims=hidden_dims, kl_std=latent_s)
 
         # triplane encodertd
-        self.R = cfg.model.vol_feat_reso
+        self.R = cfg.model.vol_embedding_reso
         in_channels = 3
         mid_channels = self.vol_embedding_dim
         self.eps= 1e-6
@@ -824,13 +824,13 @@ class Network(L.LightningModule):
                                                                  cond_drop_prob=cfg.triplane_e.cond_drop_prob,
                                                                  depth=cfg.triplane_e.dit_block_depth)
         
-        self.upsample = nn.Sequential(
-            # 1st layer: Upsample 8x8x8 -> 16x16x16
-            nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
-            nn.ReLU(inplace=True),
-            # 2nd layer: Upsample 16x16x16 -> 32x32x32
-            nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
-        )
+        # self.upsample = nn.Sequential(
+        #     # 1st layer: Upsample 8x8x8 -> 16x16x16
+        #     nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
+        #     nn.ReLU(inplace=True),
+        #     # 2nd layer: Upsample 16x16x16 -> 32x32x32
+        #     nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
+        # )
         
         # # feat volume classifier
         # self.vol_classifier = nn.Sequential(
@@ -1097,56 +1097,6 @@ class Network(L.LightningModule):
             # visualize_images(input_images, num_rows=int(input_images.shape[0]/self.cfg.n_views), num_cols=self.cfg.n_views)
             #########################################################
             descs, descs_cls = self.img_encoder(input_images)  # (B,900,384)
-        #     dino_feats = patch2pixel(descs, original_sizes=orignal_sizes)  # resize back to K,K =>( K, K, 384), (B, 156, 156, 384)
-        #     # create dino-feat with orignal size
-        #     batch_size, dino_height, dino_width, feat_dim = (descs.shape[0], image_size[0], image_size[1], descs.shape[-1]) # B, 420, 420, 384
-        #     dino_feat_orig = torch.zeros(batch_size, dino_height, dino_width, feat_dim).to("cuda")
-        #     # Fill the pixel features into the dino_feat_orig tensor for each batch element
-        #     for i in range(batch_size):
-        #         # Extract the bounding box for the current batch element
-        #         bbox_x1, bbox_y1, bbox_x2, bbox_y2 = bboxes[i]
-        #         # Get the pixel feature for the current batch element
-        #         pixel_feature = dino_feats[i]
-        #         # Fill the corresponding region in the dino_feat_orig tensor
-        #         dino_feat_orig[i, bbox_y1:bbox_y2, bbox_x1:bbox_x2, :] = pixel_feature # reize back to K,K =>(420, 420, 384) # gradint is not supported for this operation
-            
-        #     # Apply the mask
-        #     dino_feat_masked = dino_feat_orig * img_masks
-        #     dino_feat_masked = dino_feat_masked.permute(0, 3, 1, 2) # (B, 384, 420, 420)
-
-        #     chunks_dino = torch.split(dino_feat_masked, self.cfg.n_views, dim=0) # Tuple(tensor(1, 384, 420, 420))
-
-        # else:
-        #     chunks_dino = torch.split(images[:,...,:3].permute(0,3,1,2),self.cfg.n_views,dim=0)
-
-        # image_masks = images[:, ..., 3][:, None]
-        # depth_images = fragments[:, ..., 0][:, None] * image_masks
-        # ##############################################################
-        # feature_point_cloud_batch = []
-
-        # chunks_depth = torch.split(depth_images, self.cfg.n_views, dim=0) # Tuple(tensor(1, 1, 420, 420))
-        # chunks_mask = torch.split(image_masks, self.cfg.n_views, dim=0) # Tuple(tensor(1, 1, 420, 420))
-    
-        # for idx, (dino_feat_masked, depth_images, image_masks) in enumerate(zip(chunks_dino, chunks_depth, chunks_mask)):
-        #     # dino_feat_masked = resize_tensor(dino_feat_masked, scale)
-        #     # depth_images =resize_tensor(depth_images, scale)
-        #     # image_masks = resize_tensor(image_masks, scale)
-        #     feature_point_cloud = get_rgbd_point_cloud(cameras[idx], dino_feat_masked, depth_map=depth_images,
-        #                                                 mask=image_masks)  # everthing on GPU
-
-        #     points = feature_point_cloud.points_list()[0].detach().cpu() # (N, 3)
-        #     colors = feature_point_cloud.features_list()[0].detach().cpu() # (N, 384)
-        #     feature_point_cloud = torch.cat((points, colors), dim=1) # (N, 3+384)
-        #     indices = np.random.choice(feature_point_cloud.shape[0], num_pts_sampled, replace=False)  # Random indices
-        #     feature_point_cloud_batch.append(feature_point_cloud[indices,:]) 
-
-        # feature_point_cloud_batch = torch.stack(feature_point_cloud_batch, dim=0)
-        # # feature_point_cloud_batch = None
-
-        # if dino:
-        #     return feature_point_cloud_batch, descs, descs_cls
-        # else:
-        #     return feature_point_cloud_batch, None, None
         return descs, descs_cls
 
     
@@ -1230,7 +1180,7 @@ class Network(L.LightningModule):
         proj_feat = torch.stack(proj_feat, -1) # B, C_proj, R,R,3 
         return proj_feat, norm_coords
 
-    def forward(self, batch, return_buffer=False):
+    def forward(self, batch, with_fine, return_buffer=False):
         ########################################################
         n_views_sel = self.cfg.n_views
         assert n_views_sel == 1, "It's not single-view input!!"
@@ -1255,13 +1205,6 @@ class Network(L.LightningModule):
                 text_inputs = torch.cat([clip.tokenize(_label) for _label in batch['label']]).to(_inps.device)
                 text_features = self.clip_model.encode_text(text_inputs).to(torch.float32)
                 label_cls = self.clip_labelling_ln(text_features)
-
-                # print("#"*30)
-                # print("clip linear params:")
-                # for params in self.clip_labelling_ln.parameters():
-                #     print(params.sum(), params.mean(), params.std())
-                # print("#"*30)
-
                 replicated_cls = label_cls.unsqueeze(1).expand(-1, N, -1)
                 label_cls = replicated_cls.reshape(B*N, -1)
             else:
@@ -1269,25 +1212,6 @@ class Network(L.LightningModule):
         else:
             label_cls = dino_cls
         ########################################################
-        
-        # input_x = self.pc_emb.unsqueeze(0).expand(B*N, -1, -1) # (B*N, input_channel, 1024)
-        # # print(input_x.sum())
-        # pred_pc = self.pc_transformer(input_x, dino_feat, label_cls) # (B*N, 1024, 3), replace the dino_cls with obj_id, positional encoding: a hard mapping between the object label and the label id
-
-        # gt_pc = batch['pc'].float()
-        # gt_pc.requires_grad_(True)
-        # gt_pc = feature_point_cloud_batch[:, :, :3] # B,N,3 -> B,1,N,3 -> B,V,N,3 -> BV,N,3
-        # probs = torch.ones(gt_pc.size(1)) / gt_pc.size(1)
-        # indices = torch.multinomial(probs, num_samples=self.n_ctx, replacement=False)
-        # downsampled_gt_pc = gt_pc[:, indices, :]  # Shape (B, n, C)
-        # replicated_pc = gt_pc.unsqueeze(1).expand(-1, N, -1, -1)  # Shape (B, n*m, C)
-        # gt_pc = replicated_pc.reshape(B*N, -1, 3)#.to(self.device)  # Shape (B*N, n, C) # gt_pc[0]==gt_pc[N-1]
-
-        # if prex == 'train':
-        #     proj_feat, norm_coords = self.triplane_projection(gt_pc)
-        # else:
-        #     proj_feat, norm_coords = self.triplane_projection(pred_pc)
-        # proj_feat, norm_coords = self.triplane_projection(pred_pc)
 
         gt_volume = batch['tar_volume']
         replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
@@ -1317,24 +1241,11 @@ class Network(L.LightningModule):
 
         # rendering
         _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, self.R)
-
-        # _offset_coarse = self.offset.unsqueeze(0).expand(B*N, *self.offset.shape)
-        # _shs_coarse = self.shs.unsqueeze(0).expand(B*N, *self.shs.shape)
-        # _scaling_coarse = self.scaling.unsqueeze(0).expand(B*N, *self.scaling.shape)
-        # _rotation_coarse = self.rotation.unsqueeze(0).expand(B*N, *self.rotation.shape)
-        # _opacity_coarse = self.opacity.unsqueeze(0).expand(B*N, *self.opacity.shape)
-
-        # convert to local positions
-        # if prex == 'train':
-        #     centers = torch.stack([gt_pc]*self.K, dim=2).reshape(B*N,-1,3)
-        # else:
-        #     centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3) # (B*N, 1024*2, 3), gt_pc
-        # centers = torch.stack([pred_pc]*self.K, dim=2).reshape(B*N,-1,3)
         
         _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16, 16, 16, K, 3)
 
-        # _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B, 1024*2)
-        # masks =  _opacity_coarse_tmp > 0.5
+        _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B*N, 16, 16, 16, K)
+        masks =  _opacity_coarse_tmp > 0.005
         render_img_scale = batch.get('render_img_scale', 1.0)
         
         # volume_feat_up = volume_feat_up.view(B,-1,volume_feat_up.shape[-1])
@@ -1345,6 +1256,8 @@ class Network(L.LightningModule):
             znear, zfar = batch['near_far'][i]
             fovx,fovy = batch['fovx'][i], batch['fovy'][i]
             height, width = int(batch['meta']['tar_h'][i]*render_img_scale), int(batch['meta']['tar_w'][i]*render_img_scale)
+
+            mask = masks[i].view(-1).detach() # (16*16*16*K)
 
             _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
             _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
@@ -1368,6 +1281,32 @@ class Network(L.LightningModule):
                 # coarse
                 frame = self.gs_render.render_img(cam, rays_d, _centers, _shs, _opacity, _scaling, _rotation, self.device)
                 outputs_view.append(frame)
+
+            rendering_coarse = {k: torch.stack([d[k] for d in outputs_view[:n_views_sel]]) for k in outputs_view[0]}
+
+            if with_fine:
+                    
+                mask = self._check_mask(mask)
+                point_feats, mask = self.get_point_feats(i, _inps[i], rendering_coarse, n_views_sel, batch, _centers, mask)
+
+                _centers = _centers[mask]
+                point_feats =  torch.einsum('lcb->blc', point_feats)
+
+                volume_point_feat = feat_vol[i].permute(1, 2, 3, 0).reshape(-1, self.vol_embedding_dim).unsqueeze(1).expand(-1,self.K,-1)[mask.view(-1,self.K)]
+                _shs_fine = self.decoder.forward_fine(volume_point_feat, point_feats).view(-1,*_shs.shape[-2:]) + _shs[mask]
+                
+                if return_buffer:
+                    render_pkg.append((_centers, _shs_fine, _opacity, _scaling, _rotation, mask))
+                    
+                for j, c2w in enumerate(tar_c2ws):
+                    
+                    bg_color = batch['bg_color'][i,j]
+                    self.gs_render.set_bg_color(bg_color)
+                
+                    rays_d = batch['tar_rays'][i,j]
+                    cam = MiniCam(c2w, width, height, fovy, fovx, znear, zfar, self.device)
+                    frame_fine = self.gs_render.render_img(cam, rays_d, _centers, _shs_fine, _opacity[mask], _scaling[mask], _rotation[mask], self.device, prex='_fine')
+                    outputs_view[j].update(frame_fine)
             
             outputs.append({k: torch.cat([d[k] for d in outputs_view], dim=1) for k in outputs_view[0]})
         

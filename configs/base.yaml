@@ -7,9 +7,9 @@ model:
     encoder_backbone: 'dinov2_vits14' # ['vit_small_patch16_224.dino','vit_base_patch16_224.dino', 'dinov2_vits14']
 
     n_groups: [4]  # n_groups for local attention
-    n_offset_groups: 16     # offset radius of 1/n_offset_groups of the scene size
+    # n_offset_groups: 32     # offset radius of 1/n_offset_groups of the scene size
 
-    K: 8  # primitives per-voxel
+    K: 2  # primitives per-voxel
     sh_degree: 1    # view dependent color
 
     # num_layers: 6 # 12
@@ -21,8 +21,8 @@ model:
     label_in_channels: 128
     label_out_channels: 384
 
-    vol_feat_reso: 16
-    vol_embedding_reso: 16
+    # vol_feat_reso: 32
+    vol_embedding_reso: 32
 
     vol_embedding_out_dim: 80
 
@@ -47,7 +47,7 @@ model:
 
 triplane_e:
     cond_drop_prob: 0.1
-    heads: 8
+    heads: 6
     init_scale: 0.25
     layers: 6
     n_ctx: 256
@@ -61,12 +61,11 @@ triplane_e:
 
 train_dataset:
     dataset_name: custom_preload # shapenet_temp housecat6d
-    # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_renders
+    data_root: /home/q672126/project/omni3d/train_on_one_category # train_on_one_category
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
-    voxel_reso: 16
+    voxel_reso: 32
     n_scenes: 42
     load_normal: True
     positional_labelling: False
@@ -76,12 +75,11 @@ train_dataset:
 
 test_dataset:
     dataset_name: custom_preload # shapenet_temp housecat6d
-    # data_root: dataset/gobjaverse/gobjaverse.h5, /mnt/hdd/lara_data/dataset/Co3D/co3d_teddybear.h5, /home/lu/project/LaRa/housecat_objects_instances, /mnt/hdd/lara_data/dataset/housecat6d
-    data_root: /home/q672126/project/omni3d/single #/home/q672126/project/anything6d/gso_val
+    data_root: /home/q672126/project/omni3d/val_on_one_category # val_on_one_category
     split: test
     img_size: [420, 420]
     n_group: ${n_views}
-    voxel_reso: 16
+    voxel_reso: 32
     n_scenes: 42
     load_normal: True
     positional_labelling: False
@@ -100,9 +98,10 @@ train:
     n_epoch: 30000
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
-    check_val_every_n_epoch: 20
+    check_val_every_n_epoch: 1
     log_train_every_n_step: 20
     start_save: 0
+    start_fine: 500
     use_rand_views: False
 test:
     batch_size: 4
