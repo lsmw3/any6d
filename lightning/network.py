@@ -712,7 +712,7 @@ class Network(L.LightningModule):
         super(Network, self).__init__()
 
         self.cfg = cfg
-        self.scene_size = 0.5
+        self.scene_size = cfg.scene_size
         self.offset_size = 0.005
         self.white_bkgd = white_bkgd
 
@@ -770,9 +770,9 @@ class Network(L.LightningModule):
         self.gs_render = Renderer(sh_degree=cfg.model.sh_degree, white_background=white_bkgd, radius=1)
 
         # parameters initialization
-        self.opacity_shift = -2.1792 # -2.15
+        self.opacity_shift = cfg.opacity_shift
         # self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
-        self.scaling_shift = -4
+        self.scaling_shift = cfg.scaling_shift
 
         # # VAE
         # self.specs = specs
@@ -814,7 +814,7 @@ class Network(L.LightningModule):
         # triplane transformer
         self.trip_emb = nn.Parameter(torch.randn(3, self.vol_embedding_dim, self.R, self.R), requires_grad=True)
         self.trip_transformer = TriplaneTokenTransformer(cfg=cfg, device="cuda", dtype=torch.float,
-                                                                 n_ctx=cfg.triplane_e.n_ctx,
+                                                                 n_ctx=cfg.voxel_reso ** 2,
                                                                  width=cfg.triplane_e.width,
                                                                  layers=cfg.triplane_e.layers,
                                                                  input_channels=cfg.triplane_e.input_channels,
@@ -884,9 +884,9 @@ class Network(L.LightningModule):
         imgs_coarse = torch.cat((img_ref, torch.einsum('bhwc->bchw', imgs_coarse)),dim=1)
         feats_coarse = F.grid_sample(imgs_coarse, point_xy.unsqueeze(1), align_corners=False).view(n_views_sel,-1,n_points).to(imgs_coarse)
         
-        z_diff = (feats_coarse[:,-1:] - point_z.view(n_views_sel,-1,n_points)).abs()
+        z_diff = (feats_coarse[:,-1:] - point_z.view(n_views_sel,-1, n_points)).abs()
                     
-        point_feats = torch.cat((feats_coarse[:,:-1],z_diff), dim=1) # [...,_mask]
+        point_feats = torch.cat((feats_coarse[:,:-1], z_diff), dim=1) # [...,_mask]
         
         return point_feats, mask
     
@@ -977,7 +977,7 @@ class Network(L.LightningModule):
 
         # Extract rotation matrix R and translation vector T for all batch elements
         R = pytorch3d_ext[:, :, :3, :3].permute(0,1,3,2)  # Transpose the rotation matrices
-        T = -torch.matmul(pytorch3d_ext[:, :, :3, :3], pytorch3d_ext[:, :, 3, :3].unsqueeze(-1)).squeeze(-1)  # Batch matrix multiplication for translation
+        T = -torch.matmul(pytorch3d_ext[:, :, :3, :3], pytorch3d_ext[:, :, 3, :3].unsqueeze(-1)).squeeze(-1) # Batch matrix multiplication for translation
 
         # Create the camera parameters for the batch
         cameras = []
@@ -1187,12 +1187,11 @@ class Network(L.LightningModule):
         B,N,H,W,C = batch['tar_occluded_rgb'][:,:n_views_sel].shape
         #
         _inps = batch['tar_occluded_rgb'][:,:n_views_sel].reshape(B*n_views_sel,H,W,C)
-        _inps = torch.einsum('bhwc->bchw', _inps)
 
         ########################################################
         # cameras, images, fragments = self.get_batch_view(batch, n_views_sel, scale=1)
-        images = self.get_batch_view(batch, n_views_sel, scale=1)
-        dino_feat, dino_cls = self.fuse_feature(images, fragments=None, cameras=None, image_size=[420,420],num_pts_sampled=1024, scale=1,dino=True)
+        # images = self.get_batch_view(batch, n_views_sel, scale=1)
+        dino_feat, dino_cls = self.fuse_feature(_inps, fragments=None, cameras=None, image_size=[420,420],num_pts_sampled=1024, scale=1,dino=True)
         # dino_feat (B*N, 900, 384), dino_cls (B*N, 384)
         ########################################################
 
@@ -1249,7 +1248,7 @@ class Network(L.LightningModule):
         render_img_scale = batch.get('render_img_scale', 1.0)
         
         # volume_feat_up = volume_feat_up.view(B,-1,volume_feat_up.shape[-1])
-        _inps = _inps.reshape(B,n_views_sel,C,H,W).float()
+        _inps = _inps.permute(0, 3, 1, 2).reshape(B,n_views_sel,C,H,W).float()
         
         outputs,render_pkg = [],[]
         for i in range(B):
@@ -1312,7 +1311,7 @@ class Network(L.LightningModule):
         
         outputs = {k: torch.stack([d[k] for d in outputs]) for k in outputs[0]}
         if return_buffer:
-            outputs.update({'render_pkg':render_pkg}) 
+            outputs.update({'render_pkg':render_pkg})
         
         outputs.update({'feat_vol':feat_vol.detach()})
         outputs.update({'proj_feats_vis':proj_feats_vis})
