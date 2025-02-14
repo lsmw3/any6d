@@ -712,7 +712,7 @@ class Network(L.LightningModule):
         super(Network, self).__init__()
 
         self.cfg = cfg
-        self.scene_size = cfg.scene_size
+        self.scene_size = cfg.model.scene_size
         self.offset_size = 0.005
         self.white_bkgd = white_bkgd
 
@@ -770,9 +770,9 @@ class Network(L.LightningModule):
         self.gs_render = Renderer(sh_degree=cfg.model.sh_degree, white_background=white_bkgd, radius=1)
 
         # parameters initialization
-        self.opacity_shift = cfg.opacity_shift
+        self.opacity_shift = cfg.model.opacity_shift
         # self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
-        self.scaling_shift = cfg.scaling_shift
+        self.scaling_shift = cfg.model.scaling_shift
 
         # # VAE
         # self.specs = specs
