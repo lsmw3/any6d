@@ -55,7 +55,7 @@ triplane_e:
     heads: 6
     init_scale: 0.25
     layers: 6
-    n_ctx: 1024
+    # n_ctx: 256
     embedding_channels: 128
     input_channels: 384
     output_channels: 384
