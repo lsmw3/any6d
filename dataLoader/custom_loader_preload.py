@@ -59,17 +59,14 @@ class custom_loader_preload(torch.utils.data.Dataset):
             label, instance = None, label_instance
 
         view_ids = range(self.n_scenes)
-        
-        # cam_params = np.load(f"{instance}/cam_params.npz") # 0.0055s
-        
-        # with h5py.File(os.path.join(instance, "cam_params.h5"), "r") as f:
-        #     cam_params = {key: f[key][:] for key in f.keys()}
 
         if self.split=='train':
             inps_id = random.sample(view_ids[4:-4], k=1)
             view_id = inps_id + random.sample(list(set(view_ids[4:-4])-set(inps_id)), k=4)
         else:
             view_id = random.sample(list(view_ids[:4]) + list(view_ids[-4:]), k=5)
+        
+        # view_id = [16]
         
         ret = self.get_input(instance, view_id) # 0.1970s
 

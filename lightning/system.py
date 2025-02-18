@@ -35,8 +35,8 @@ class system(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
         self.net.train()
-        output = self.net(batch, with_fine=self.current_epoch>self.cfg.train.start_fine)
-        loss, scalar_stats = self.loss(batch, output, self.global_step)
+        output = self.net(batch, with_fine=self.current_epoch>=self.cfg.train.start_fine)
+        loss, scalar_stats = self.loss(batch, output, start_normal=self.current_epoch>=self.cfg.train.start_normal, lambda_normal=self.cfg.train.lambda_normal)
 
         for key, value in scalar_stats.items():
             if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm']:
@@ -55,8 +55,8 @@ class system(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         self.net.eval()
-        output = self.net(batch, with_fine=self.current_epoch>self.cfg.train.start_fine)
-        loss, scalar_stats = self.loss(batch, output, self.global_step)
+        output = self.net(batch, with_fine=self.current_epoch>=self.cfg.train.start_fine)
+        loss, scalar_stats = self.loss(batch, output, start_normal=self.current_epoch>=self.cfg.train.start_normal, lambda_normal=self.cfg.train.lambda_normal)
 
         for key, value in scalar_stats.items():
             prog_bar = True if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm'] else False
@@ -196,7 +196,19 @@ class system(L.LightningModule):
             betas=(self.cfg.train.beta1, self.cfg.train.beta2),
         )
 
-        return {"optimizer": optimizer}
+        # total_global_batches = self.num_steps()
+        # scheduler = CosineWarmupScheduler(
+        #                 optimizer=optimizer,
+        #                 warmup_iters=self.cfg.train.warmup_iters,
+        #                 max_iters=2 * total_global_batches,
+        #             )
+
+        return {"optimizer": optimizer,
+                # "lr_scheduler": {
+                #     'scheduler': scheduler,
+                #     'interval': 'step'  # or 'epoch' for epoch-level updates
+                #     }
+                }
 
     # def configure_optimizers(self):
     #     decay_params, no_decay_params = [], []

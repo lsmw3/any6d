@@ -5,8 +5,6 @@ from pytorch_msssim import MS_SSIM
 from torch.nn import functional as F
 
 from torch.cuda.amp import autocast
-#from third_party.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
-from pytorch3d.loss import chamfer_distance
 
 
 def weighted_bce_loss(pred, target, positive_weight):
@@ -40,7 +38,7 @@ class Losses(nn.Module):
         masked_cos = cos[mask.squeeze(-1) == 1]
         return (1 - masked_cos[masked_cos < np.cos(thrsh)]).mean()
 
-    def forward(self, batch, output, iter):
+    def forward(self, batch, output, start_normal, lambda_normal):
 
         scalar_stats = {}
         loss = 0
@@ -53,6 +51,8 @@ class Losses(nn.Module):
         # volume_mask = output['volume_mask'].to(torch.uint8)
         # valid_counts = volume_mask.sum(dim=1)
         # optimize_gaussian = valid_counts.min().item() > 10
+
+        lambda_nrm = lambda_normal if start_normal else 0.
             
         if 'image' in output:
 
@@ -63,8 +63,8 @@ class Losses(nn.Module):
 
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
-                # loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*10
-                loss += color_loss_all.mean()
+                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*2 + color_loss_all[mask.expand(-1, -1, -1, 3) == 0].mean()
+                # loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
                     torch.log(torch.Tensor([10.]).to(color_loss_all.device))
@@ -95,16 +95,7 @@ class Losses(nn.Module):
 
                     normal_error = ((1 - (rend_normal_world * depth_normal).sum(dim=-1))*acc_map).mean()
                     scalar_stats.update({f'depth_norm{prex}': normal_error.detach()})
-                    loss += normal_error * 0.2 # / (normal_error/ loss_cd).detach()
-
-                # else:
-                #     if 'pred_pc' in output:
-                #         loss_cd,loss_cdn = chamfer_distance(output['pred_pc'], output['gt_pc'])
-                #         loss = loss_cd
-                #         # loss += loss_cd
-                #         scalar_stats.update({f'chamferdist': loss_cd.detach()})
-                #     else:
-                #         raise NotImplementedError("There's no predicted point cloud in the output!!!")
+                    loss += normal_error * lambda_nrm # / (normal_error/ loss_cd).detach()
 
                 # if 'pred_volume' in output:
                 #     gt_volume = output['gt_volume']#.reshape(B, -1)

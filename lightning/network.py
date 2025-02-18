@@ -1244,7 +1244,7 @@ class Network(L.LightningModule):
         _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16, 16, 16, K, 3)
 
         _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B*N, 16, 16, 16, K)
-        masks =  _opacity_coarse_tmp > 0.005
+        masks = _opacity_coarse_tmp > self.cfg.model.opacity_threshold
         render_img_scale = batch.get('render_img_scale', 1.0)
         
         # volume_feat_up = volume_feat_up.view(B,-1,volume_feat_up.shape[-1])

@@ -78,7 +78,7 @@ def main(cfg, specs):
         monitor='val loss',
         # save_last=True,
         save_top_k=1,             # Set to -1 to save all checkpoints
-        every_n_epochs=500000,          # cfg.train.check_val_every_n_epoch
+        every_n_epochs=cfg.train.save_ckpt_every_n_epoch,          # cfg.train.check_val_every_n_epoch
         save_on_train_epoch_end=True,  # Ensure it saves at the end of an epoch, not the beginning
     )
 
