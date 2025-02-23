@@ -35,9 +35,9 @@ model:
     opacity_shift: -2.1729
     scaling_shift: -4.5
 
-    opacity_threshold: 0.001
+    opacity_threshold: 0.02
 
-    # ckpt_path: logs/LaRa/release-test/vol_render_epoch=999-v1.ckpt # specify a ckpt path if you want to continue training  
+    # ckpt_path: logs/LaRa/release-test/oclu-fine-16/vol_render_epoch=3999.ckpt # specify a ckpt path if you want to continue training  
 
 # point_e:
 #     cond_drop_prob: 0.1
@@ -95,25 +95,25 @@ test_dataset:
     max_occlusion_ratio: 0.9
 
 train:
-    batch_size: 2
+    batch_size: 3
     lr: 1e-4
     beta1: 0.9
     beta2: 0.95
     weight_decay: 0.05
     # betas: [0.9, 0.95]
     warmup_iters: 0
-    n_epoch: 10000
+    n_epoch: 5000
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
     save_ckpt_every_n_epoch: 200
     check_val_every_n_epoch: 5
-    log_train_every_n_step: 600
-    start_save: 0
+    log_train_every_n_step: 400
+    start_save: 1500
     start_fine: 1500
-    lambda_normal: 0.2
-    start_normal: 0
+    lambda_normal: 0.1
+    start_normal: 3000
 test:
-    batch_size: 2
+    batch_size: 3
     log_val_every_n_step: 1
 
 logger: 

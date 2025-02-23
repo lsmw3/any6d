@@ -91,11 +91,11 @@ class Losses(nn.Module):
                     if gt_normal_world is not None:
                         loss_surface = self.cos_loss(rend_normal_world, gt_normal_world, mask)
                         scalar_stats.update({f'normal{prex}': loss_surface.detach()})
-                        # loss += loss_surface * 0.1 # / (loss_surface / loss_cd).detach()
+                        loss += loss_surface * lambda_nrm # / (loss_surface / loss_cd).detach()
 
                     normal_error = ((1 - (rend_normal_world * depth_normal).sum(dim=-1))*acc_map).mean()
                     scalar_stats.update({f'depth_norm{prex}': normal_error.detach()})
-                    loss += normal_error * lambda_nrm # / (normal_error/ loss_cd).detach()
+                    loss += normal_error * 0.2 # / (normal_error/ loss_cd).detach()
 
                 # if 'pred_volume' in output:
                 #     gt_volume = output['gt_volume']#.reshape(B, -1)

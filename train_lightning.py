@@ -50,7 +50,7 @@ def main(cfg, specs):
     train_dataset = dataset_dict[cfg.train_dataset.dataset_name]
     train_loader = DataLoader(train_dataset(cfg.train_dataset), 
                               batch_size= cfg.train.batch_size,
-                              num_workers= 8, 
+                              num_workers=8, 
                               shuffle=True,
                               pin_memory=False)
     val_dataset = dataset_dict[cfg.test_dataset.dataset_name]
@@ -73,13 +73,13 @@ def main(cfg, specs):
     # Set up ModelCheckpoint callback
     checkpoint_callback = CustomModelCheckpoint(
         save_after_epoch=cfg.train.start_save,
-        dirpath=cfg.logger.dir,        # Path where checkpoints will be saved
-        filename='vol_render_{epoch}',        # Filename for the checkpoints
-        monitor='val loss',
+        dirpath=os.path.join(cfg.logger.dir, "oclu-fine-16-renrm"),
+        filename='vol_render_{epoch}',
+        # monitor='val loss',
         # save_last=True,
-        save_top_k=1,             # Set to -1 to save all checkpoints
-        every_n_epochs=cfg.train.save_ckpt_every_n_epoch,          # cfg.train.check_val_every_n_epoch
-        save_on_train_epoch_end=True,  # Ensure it saves at the end of an epoch, not the beginning
+        save_top_k=-1,             # Set to -1 to save all checkpoints
+        every_n_epochs=cfg.train.save_ckpt_every_n_epoch,
+        save_on_train_epoch_end=True
     )
 
     my_system = system(cfg, specs)
@@ -90,7 +90,7 @@ def main(cfg, specs):
                         # max_epochs=1,
                         accelerator='gpu',
                         strategy=DDPStrategy(find_unused_parameters=True),
-                        accumulate_grad_batches=2,
+                        accumulate_grad_batches=1,
                         logger=logger,
                         gradient_clip_val=0.5,
                         # precision="bf16-mixed",

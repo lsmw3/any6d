@@ -2,9 +2,6 @@ import torch
 import numpy as np
 from lightning.loss import Losses
 import pytorch_lightning as L
-import wandb
-import time
-
 import torchvision
 from torchvision import transforms
 
