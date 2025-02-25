@@ -67,8 +67,8 @@ triplane_e:
     dit_block_depth: 4
 
 train_dataset:
-    dataset_name: custom_preload # shapenet_temp housecat6d
-    data_root: /home/q672126/project/omni3d/train_on_one_category # train_on_one_category
+    dataset_name: custom # shapenet_temp housecat6d
+    data_root: /home/q672126/project/omni3d/train # train_on_one_category
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
@@ -78,11 +78,10 @@ train_dataset:
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
-    max_occlusion_ratio: 0.9
 
 test_dataset:
-    dataset_name: custom_preload # shapenet_temp housecat6d
-    data_root: /home/q672126/project/omni3d/val_on_one_category # val_on_one_category
+    dataset_name: custom # shapenet_temp housecat6d
+    data_root: /home/q672126/project/omni3d/val # val_on_one_category
     split: test
     img_size: [420, 420]
     n_group: ${n_views}
@@ -92,7 +91,6 @@ test_dataset:
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
-    max_occlusion_ratio: 0.9
 
 train:
     batch_size: 3

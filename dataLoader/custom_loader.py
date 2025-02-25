@@ -5,7 +5,6 @@ from glob import glob
 import random
 import torch
 from dataLoader.utils import build_rays
-from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 from collections import defaultdict
 import h5py
@@ -206,7 +205,7 @@ class custom_loader(torch.utils.data.Dataset):
         white_pixels = np.all(img == [255, 255, 255], axis=-1)
         mask[white_pixels] = [0, 0, 0]
 
-        occluded_img = self.apply_occlusion(img, mask[:, :, 0], max_occlusion_ratio=self.cfg.max_occlusion_ratio)
+        occluded_img = self.add_random_occlusion(img, mask[:, :, 0])
         occluded_mask = np.ones_like(occluded_img, dtype=np.uint8)
         occluded_white_pixels = np.all(occluded_img == [255, 255, 255], axis=-1)
         occluded_mask[occluded_white_pixels] = [0, 0, 0]
@@ -224,77 +223,109 @@ class custom_loader(torch.utils.data.Dataset):
             return img, occluded_img, normalized_normal.astype(np.float32), mask[:, :, 0].astype(np.uint8)
 
         return img, occluded_img, None, mask[:, :, 0].astype(np.uint8)
+
+    def add_random_occlusion(self, image, mask, shape_type=None, occlusion_color=(255, 255, 255), 
+                         min_points=3, max_points=8, min_size_ratio=0.6, max_size_ratio=0.7):
+        H, W = mask.shape
+        
+        # Get object coordinates
+        y_indices, x_indices = np.where(mask > 0)
+        
+        if len(y_indices) == 0:
+            # No object detected in mask
+            return image.copy()
+        
+        # Get object bounding box
+        y_min, y_max = np.min(y_indices), np.max(y_indices)
+        x_min, x_max = np.min(x_indices), np.max(x_indices)
+        
+        # Compute object center and dimensions
+        center_y = (y_min + y_max) // 2
+        center_x = (x_min + x_max) // 2
+        obj_height = y_max - y_min
+        obj_width = x_max - x_min
+        
+        # Determine occlusion size
+        obj_size = max(obj_height, obj_width)
+        occlusion_size = random.uniform(min_size_ratio, max_size_ratio) * obj_size
+        
+        # Randomly position the occlusion center, potentially overlapping with the object
+        occlusion_center_y = random.randint(max(0, center_y - obj_height), min(H - 1, center_y + obj_height))
+        occlusion_center_x = random.randint(max(0, center_x - obj_width), min(W - 1, center_x + obj_width))
+        
+        # If shape_type is None, randomly choose between available shapes
+        if shape_type is None:
+            shape_type = random.choice(['convex', 'circle', 'ellipse'])
+        
+        # Create a copy of the image to modify
+        result_image = image.copy()
+        
+        if shape_type == 'convex':
+            # Generate random convex polygon
+            num_points = random.randint(min_points, max_points)
+            angles = np.sort(np.random.uniform(0, 2 * np.pi, num_points))
+            
+            # Generate random distances from center for each angle
+            max_radius = occlusion_size / 2
+            min_radius = max_radius * 0.3  # To ensure the shape isn't too small
+            radii = np.random.uniform(min_radius, max_radius, num_points)
+            
+            # Calculate points coordinates
+            x_points = occlusion_center_x + radii * np.cos(angles)
+            y_points = occlusion_center_y + radii * np.sin(angles)
+            
+            # Clip coordinates to image bounds
+            x_points = np.clip(x_points, 0, W - 1)
+            y_points = np.clip(y_points, 0, H - 1)
+            
+            # Combine points
+            points = np.column_stack((x_points, y_points)).astype(np.int32)
+            
+            # Draw the convex polygon as an occlusion
+            cv2.fillPoly(result_image, [points], occlusion_color)
+        
+        elif shape_type == 'circle':
+            # Generate a circular occlusion
+            radius = int(occlusion_size / 2)
+            
+            # Draw filled circle
+            cv2.circle(
+                result_image, 
+                center=(int(occlusion_center_x), int(occlusion_center_y)), 
+                radius=radius, 
+                color=occlusion_color, 
+                thickness=-1  # -1 means filled
+            )
+        
+        elif shape_type == 'ellipse':
+            # Generate an elliptical occlusion
+            # Randomly determine major and minor axes
+            if random.random() > 0.5:
+                # Horizontal ellipse
+                major_axis = int(occlusion_size)
+                minor_axis = int(occlusion_size * random.uniform(0.5, 0.9))
+                angle = random.uniform(0, 180)
+            else:
+                # Vertical ellipse
+                minor_axis = int(occlusion_size)
+                major_axis = int(occlusion_size * random.uniform(0.5, 0.9))
+                angle = random.uniform(0, 180)
+                
+            # Draw filled ellipse
+            cv2.ellipse(
+                result_image,
+                center=(int(occlusion_center_x), int(occlusion_center_y)),
+                axes=(major_axis // 2, minor_axis // 2),
+                angle=angle,
+                startAngle=0,
+                endAngle=360,
+                color=occlusion_color,
+                thickness=-1  # -1 means filled
+            )
+        
+        return result_image
+
     
-    def apply_occlusion(self, image, mask, max_occlusion_ratio):
-        # Ensure mask is binary
-        mask = (mask > 0).astype(np.uint8)
-
-        # Find object pixels
-        object_pixels = np.column_stack(np.where(mask == 1))
-        num_object_pixels = len(object_pixels)
-        if num_object_pixels == 0:
-            return image  # No object found
-
-        # Compute max occlusion area
-        max_occlusion_area = int(num_object_pixels * max_occlusion_ratio)
-
-        # Get bounding box of the object
-        x_coords, y_coords = object_pixels[:, 1], object_pixels[:, 0]
-        x_min, x_max = np.min(x_coords), np.max(x_coords)
-        y_min, y_max = np.min(y_coords), np.max(y_coords)
-
-        # Try generating a valid occlusion within the area limit
-        while True:
-            # Select an ellipse center inside the object
-            center_x = random.randint(x_min, x_max)
-            center_y = random.randint(y_min, y_max)
-
-            # Define random ellipse size within object bounds
-            axis_length_x = random.randint(int(0.2 * (x_max - x_min)), int(0.5 * (x_max - x_min)))
-            axis_length_y = random.randint(int(0.2 * (y_max - y_min)), int(0.5 * (y_max - y_min)))
-
-            # Calculate estimated occlusion area
-            estimated_area = np.pi * (axis_length_x / 2) * (axis_length_y / 2)
-
-            # If the area is too large, regenerate
-            if estimated_area <= max_occlusion_area:
-                break
-
-        # Generate a random rotation angle
-        angle = random.randint(0, 360)
-
-        # Randomly determine if it’s a full or partial occlusion (arc-like)
-        if random.random() > 0.5:
-            start_angle, end_angle = random.randint(0, 180), random.randint(180, 360)  # Partial occlusion
-        else:
-            start_angle, end_angle = 0, 360  # Full ellipse occlusion
-
-        # Get background color estimate
-        bg_color = np.median(image[mask == 0], axis=0)  # Estimate background color
-
-        # Draw the occlusion on a mask
-        occlusion_mask = np.zeros_like(mask)
-        cv2.ellipse(occlusion_mask, (center_x, center_y), (axis_length_x, axis_length_y), 
-                    angle, start_angle, end_angle, 1, thickness=-1)
-
-        # Ensure occlusion stays within the object
-        occlusion_mask = occlusion_mask & mask
-
-        # Check connectivity: object should remain one connected component
-        test_mask = mask.copy()
-        test_mask[occlusion_mask == 1] = 0
-        num_labels, _, _, _ = cv2.connectedComponentsWithStats(test_mask)
-
-        if num_labels > 2:  # More than 2 means the object is split
-            return image  # Skip this occlusion to keep the object connected
-
-        # Apply occlusion
-        occluded_image = image.copy()
-        occluded_image[occlusion_mask == 1] = bg_color
-
-        return occluded_image
-
-
     def __len__(self):
         return len(self.instances)
     
