@@ -73,7 +73,7 @@ def main(cfg, specs):
     # Set up ModelCheckpoint callback
     checkpoint_callback = CustomModelCheckpoint(
         save_after_epoch=cfg.train.start_save,
-        dirpath=os.path.join(cfg.logger.dir, "oclu-fine-16-renrm"),
+        dirpath=os.path.join(cfg.logger.dir, "oclu-fine-16-crossattn"),
         filename='vol_render_{epoch}',
         monitor='val loss',
         # save_last=True,

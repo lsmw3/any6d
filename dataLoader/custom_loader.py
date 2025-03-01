@@ -189,7 +189,6 @@ class custom_loader(torch.utils.data.Dataset):
 
     def read_cam(self, cam_params, view_idx):
         c2w = np.array(cam_params[f'c2w_{view_idx}'], dtype=np.float32)
-        
         w2c = np.linalg.inv(c2w)
         
         w2c = np.array(w2c, dtype=np.float32)
@@ -225,7 +224,7 @@ class custom_loader(torch.utils.data.Dataset):
         return img, occluded_img, None, mask[:, :, 0].astype(np.uint8)
 
     def add_random_occlusion(self, image, mask, shape_type=None, occlusion_color=(255, 255, 255), 
-                         min_points=3, max_points=8, min_size_ratio=0.6, max_size_ratio=0.7):
+                         min_points=3, max_points=8, min_size_ratio=0.4, max_size_ratio=0.4):
         H, W = mask.shape
         
         # Get object coordinates

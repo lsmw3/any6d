@@ -45,8 +45,9 @@ class DinoWrapper(L.LightningModule):
         # RGB image with [0,1] scale and properly size
         # This resampling of positional embedding uses bicubic interpolation
         outputs = self.model.forward_features(self.processor(image))
+        feat_unflat = self.model.get_intermediate_layers(self.processor(image), n=1, reshape=True)[0]
 
-        return outputs["x_norm_patchtokens"], outputs['x_norm_clstoken']
+        return outputs["x_norm_patchtokens"], outputs['x_norm_clstoken'], feat_unflat
     
     def freeze(self, is_train:bool = False):
         print(f"======== image encoder is_train: {is_train} ========")
@@ -108,25 +109,24 @@ class MLP(nn.Module):
 
 
 class QKVMultiheadAttention(nn.Module):
-    def __init__(self, *, device: torch.device, dtype: torch.dtype, heads: int, n_ctx: int):
+    def __init__(self, *, device: torch.device, dtype: torch.dtype, heads: int):
         super().__init__()
         self.device = device
         self.dtype = dtype
         self.heads = heads
-        self.n_ctx = n_ctx
 
-    def forward(self, qkv):
-        bs, n_ctx, width = qkv.shape
-        attn_ch = width // self.heads // 3
-        scale = 1 / math.sqrt(math.sqrt(attn_ch))
-        qkv = qkv.view(bs, n_ctx, self.heads, -1)
-        q, k, v = torch.split(qkv, attn_ch, dim=-1)
-        weight = torch.einsum(
-            "bthc,bshc->bhts", q * scale, k * scale
-        )  # More stable with f16 than dividing afterwards
+    def forward(self, q, k, v):
+        bs, q_ctx, width = q.shape
+        k_ctx = k.shape[1]
+        attn_ch = width // self.heads
+        scale = 1 / math.sqrt(attn_ch)
+        q = q.contiguous().view(bs, q_ctx, self.heads, -1)
+        k = k.contiguous().view(bs, k_ctx, self.heads, -1)
+        v = v.contiguous().view(bs, k_ctx, self.heads, -1)
+        weight = torch.einsum("bthc,bshc->bhts", q * scale, k * scale)
         wdtype = weight.dtype
         weight = torch.softmax(weight.float(), dim=-1).type(wdtype)
-        return torch.einsum("bhts,bshc->bthc", weight, v).reshape(bs, n_ctx, -1)
+        return torch.einsum("bhts,bshc->bthc", weight, v).reshape(bs, q_ctx, -1)
     
 
 class MultiheadAttention(nn.Module):
@@ -135,24 +135,26 @@ class MultiheadAttention(nn.Module):
         *,
         device: torch.device,
         dtype: torch.dtype,
-        n_ctx: int,
         width: int,
         heads: int,
         init_scale: float,
     ):
         super().__init__()
-        self.n_ctx = n_ctx
         self.width = width
         self.heads = heads
-        self.c_qkv = nn.Linear(width, width * 3, device=device, dtype=dtype)
+        self.c_q = nn.Linear(width, width, device=device, dtype=dtype)
+        self.c_kv = nn.Linear(width, width*2, device=device, dtype=dtype)
         self.c_proj = nn.Linear(width, width, device=device, dtype=dtype)
-        self.attention = QKVMultiheadAttention(device=device, dtype=dtype, heads=heads, n_ctx=n_ctx)
-        init_linear(self.c_qkv, init_scale)
+        self.attention = QKVMultiheadAttention(device=device, dtype=dtype, heads=heads)
+        init_linear(self.c_q, init_scale)
+        init_linear(self.c_kv, init_scale)
         init_linear(self.c_proj, init_scale)
 
-    def forward(self, x):
-        x = self.c_qkv(x)
-        x = checkpoint(self.attention, (x,), (), True)
+    def forward(self, x, tgt):
+        q = self.c_q(x)
+        kv = self.c_kv(tgt)
+        k, v = torch.chunk(kv, 2, dim=-1)
+        x = self.attention(q, k, v)
         x = self.c_proj(x)
         return x
 
@@ -162,7 +164,6 @@ class ResidualAttentionBlock(nn.Module):
         *,
         device: torch.device,
         dtype: torch.dtype,
-        n_ctx: int,
         width: int,
         heads: int,
         init_scale: float = 1.0,
@@ -172,7 +173,6 @@ class ResidualAttentionBlock(nn.Module):
         self.attn = MultiheadAttention(
             device=device,
             dtype=dtype,
-            n_ctx=n_ctx,
             width=width,
             heads=heads,
             init_scale=init_scale,
@@ -181,46 +181,43 @@ class ResidualAttentionBlock(nn.Module):
         self.mlp = MLP(device=device, dtype=dtype, width=width, init_scale=init_scale)
         self.ln_2 = nn.LayerNorm(width, device=device, dtype=dtype)
 
-    def forward(self, x: torch.Tensor):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x: torch.Tensor, context: torch.Tensor):
+        x = x + self.attn(self.ln_1(x), context)
         x = x + self.mlp(self.ln_2(x))
         return x
+    
 
-
-class Transformer(nn.Module):
-    def __init__(
-        self,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-        n_ctx: int,
-        width: int,
-        layers: int,
-        heads: int,
-        init_scale: float = 0.25,
-    ):
+class CrossAttnDiTBlock(nn.Module):
+    """
+    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning, following a cross-attention layer.
+    """
+    def __init__(self, hidden_size: int, self_attn_heads, device: torch.device, dtype: torch.dtype, cross_attn_heads: int, init_scale: float = 0.25, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
-        self.n_ctx = n_ctx
-        self.width = width
-        self.layers = layers
-        init_scale = init_scale * math.sqrt(1.0 / width)
-        self.resblocks = nn.ModuleList(
-            [
-                ResidualAttentionBlock(
+        init_scale = init_scale * math.sqrt(1.0 / hidden_size)
+        self.crossattn = ResidualAttentionBlock(
                     device=device,
                     dtype=dtype,
-                    n_ctx=n_ctx,
-                    width=width,
-                    heads=heads,
+                    width=hidden_size,
+                    heads=cross_attn_heads,
                     init_scale=init_scale,
                 )
-                for _ in range(layers)
-            ]
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = Attention(hidden_size, num_heads=self_attn_heads, qkv_bias=True, **block_kwargs)
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x: torch.Tensor):
-        for block in self.resblocks:
-            x = block(x)
+    def forward(self, x, context, c):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        x = self.crossattn(x, context)
+        x = self.norm1(x)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(x, shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
     
     
@@ -232,67 +229,32 @@ class PointDiffusionTransformer(nn.Module):
         dtype: torch.dtype,
         input_channels: int = 3,
         output_channels: int = 3,
-        n_ctx: int = 1024,
         width: int = 256,
-        layers: int = 10,
-        heads: int = 8,
+        cross_attn_heads: int = 8,
         init_scale: float = 0.25,
-        time_token_cond: bool = False,
-        hidden_size=256,
         depth=6,
-        num_heads=16,
+        self_attn_heads=16,
         mlp_ratio=4.0,
-        learn_sigma=True,
     ):
         super().__init__()
         self.device = device
         self.dtype = dtype
         self.input_channels = input_channels
         self.output_channels = output_channels
-        self.n_ctx = n_ctx
         self.width = width
-        # self.time_token_cond = time_token_cond
-        # self.time_embed = MLP(
-        #     device=device, dtype=dtype, width=width, init_scale=init_scale * math.sqrt(1.0 / width)
-        # )
-
-        self.backbone = Transformer(
-            device=device,
-            dtype=dtype,
-            n_ctx=n_ctx, #+ int(time_token_cond),
-            width=width,
-            layers=layers,
-            heads=heads,
-            init_scale=init_scale,
-        )
 
         self.input_proj = nn.Linear(input_channels, width, device=device, dtype=dtype)
-        # self.output_proj = nn.Linear(width, output_channels, device=device, dtype=dtype)
-        # with torch.no_grad():
-        #     self.output_proj.weight.zero_()
-        #     self.output_proj.bias.zero_()
 
-        self.ln_pre = nn.LayerNorm(width, device=device, dtype=dtype)
+        self.ln_pre_1 = nn.LayerNorm(width, device=device, dtype=dtype)
+        self.ln_pre_2 = nn.LayerNorm(width, device=device, dtype=dtype)
         self.ln_post = nn.LayerNorm(width, device=device, dtype=dtype)
 
-        self.learn_sigma = learn_sigma
         self.out_channels = output_channels
-        self.num_heads = num_heads
-        self.cond_proj = nn.Linear(384,hidden_size,device=device,dtype=dtype)
+        self.cond_proj = nn.Linear(384, width,device=device, dtype=dtype)
         self.blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+            CrossAttnDiTBlock(width, self_attn_heads, device, dtype, cross_attn_heads, init_scale=init_scale, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.final_layer = FinalLayer(hidden_size, self.out_channels)
-
-    # def forward(self, x: torch.Tensor, t: torch.Tensor):
-    #     """
-    #     :param x: an [N x C x T] tensor.
-    #     :param t: an [N] tensor.
-    #     :return: an [N x C' x T] tensor.
-    #     """
-    #     assert x.shape[-1] == self.n_ctx
-    #     t_embed = self.time_embed(timestep_embedding(t, 512)) #self.backbone.width 512
-    #     return self._forward_with_cond(x, [(t_embed, self.time_token_cond)])
+        self.final_layer = FinalLayer(width, self.out_channels)
 
     def _forward_with_cond(
         self, x: torch.Tensor, dino_feats, dino_cls
@@ -300,103 +262,16 @@ class PointDiffusionTransformer(nn.Module):
 
         h = self.input_proj(x.permute(0, 2, 1))  # NCL -> NLC, (B*N, n_ctx, 256)
 
-        for emb, as_token in dino_feats:
-            if not as_token:
-                h = h + emb[:, None]
-        extra_tokens = [
-            (emb[:, None] if len(emb.shape) == 2 else emb)
-            for emb, as_token in dino_feats
-            if as_token
-        ] # list[(B*N, 900, 256)]
-        if len(extra_tokens):
-            h = torch.cat(extra_tokens + [h], dim=1) # (B*N, n_ctx+900, 256)
-
-        h = self.ln_pre(h)
-        h = self.backbone(h)
-        h = self.ln_post(h)
-
-        ###
-        # if len(extra_tokens):
-        #     h = h[:, sum(h.shape[1] for h in extra_tokens) :] # (B, n_ctx, 256)
-        # h_out = self.output_proj(h) # (B, n_ctx, output_channels)
-
-        # h = torch.cat([dino_feats] + [x.permute(0, 2, 1)], dim=1)
         dino_cls = self.cond_proj(dino_cls) # (B*N, 256)
+
+        h, context = self.ln_pre_1(h), self.ln_pre_2(dino_feats)
         for block in self.blocks:
-            h = block(h, dino_cls)  
-        # if len(dino_feats):
-        #     h = h[:, dino_feats.shape[1]:]
-        if len(extra_tokens):
-            h = h[:, sum(h.shape[1] for h in extra_tokens) :] # (B, n_ctx, 256)                 
+            h = block(h, context, dino_cls)
+        h = self.ln_post(h)
+              
         h = self.final_layer(h, dino_cls) # (B*N, n_ctx, output_channels)
 
         return h
-
-
-class DINOImagePointDiffusionTransformer(PointDiffusionTransformer):
-    def __init__(
-        self,
-        cfg,
-        *,
-        device: torch.device,
-        dtype: torch.dtype,
-        n_ctx: int = 1024,
-        token_cond: bool = False,
-        cond_drop_prob: float = 0.0,
-        width: int = 256,
-        **kwargs,
-    ):
-        super().__init__(device=device, dtype=dtype, n_ctx=n_ctx + int(token_cond), **kwargs)
-        self.n_ctx = n_ctx # 1024
-        self.width = width # 256
-        self.token_cond = token_cond # True
-
-        self.dino = DinoWrapper(
-            model_name=cfg.model.encoder_backbone,
-            is_train=False,
-        )
-        self.dino_embed = nn.Linear(
-            self.dino.model.num_features, width, device=device, dtype=dtype
-        ) # num_features == 384
-
-        self.cond_drop_prob = cond_drop_prob
-
-    def cached_model_kwargs(self, batch_size: int, model_kwargs: Dict[str, Any]) -> Dict[str, Any]:
-        with torch.no_grad():
-            return dict(embeddings=self.clip(batch_size, **model_kwargs))
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        images_feature,
-        conditons
-    ):
-        """
-        :param x: an [N x C x T] tensor.
-        :param t: an [N] tensor.
-        :param images: a batch of images to condition on.
-        :return: an [N x C' x T] tensor.
-        """
-        assert x.shape[-1] == self.n_ctx
-
-        # t_embed = self.time_embed(timestep_embedding(t, 512)) # self.backbone.width 512
-        dino_out = images_feature # (B*N, 900, 384)
-        # assert len(dino_out.shape) == 2 and dino_out.shape[0] == x.shape[0]
-
-        if self.training:
-            mask = torch.rand(size=[len(x)]) >= self.cond_drop_prob
-            dino_out = dino_out * mask[:, None, None].to(dino_out)
-
-        # Rescale the features to have unit variance
-        dino_out = math.sqrt(dino_out.shape[1]) * dino_out
-
-        dino_embed = self.dino_embed(dino_out) # (B*N, 900, 256)
-
-        # cond = [(dino_embed, self.token_cond), (t_embed, self.time_token_cond)]
-        cond = [(dino_embed, self.token_cond)]
-
-        # return self._forward_with_cond(x, dino_embed, conditons)
-        return self._forward_with_cond(x, cond, conditons)
     
 
 class TriplaneTokenTransformer(PointDiffusionTransformer):
@@ -412,7 +287,7 @@ class TriplaneTokenTransformer(PointDiffusionTransformer):
         width: int = 256,
         **kwargs,
     ):
-        super().__init__(device=device, dtype=dtype, n_ctx=n_ctx + int(token_cond), **kwargs)
+        super().__init__(device=device, dtype=dtype, **kwargs)
         self.n_ctx = n_ctx # 256
         self.width = width # 256
         self.token_cond = token_cond # True
@@ -422,7 +297,7 @@ class TriplaneTokenTransformer(PointDiffusionTransformer):
             is_train=False,
         )
         self.dino_embed = nn.Linear(
-            self.dino.model.num_features, width, device=device, dtype=dtype
+            in_features=self.dino.model.num_features, out_features=width, device=device, dtype=dtype
         ) # num_features == 384
 
         self.cond_drop_prob = cond_drop_prob
@@ -458,11 +333,8 @@ class TriplaneTokenTransformer(PointDiffusionTransformer):
 
         dino_embed = self.dino_embed(dino_out) # (B, 900, 256)
 
-        # cond = [(dino_embed, self.token_cond), (t_embed, self.time_token_cond)]
-        cond = [(dino_embed, self.token_cond)]
-
         # return self._forward_with_cond(x, dino_embed, conditons)
-        return self._forward_with_cond(x, cond, conditons)
+        return self._forward_with_cond(x, dino_embed, conditons)
 
 
 def projection(grid, w2cs, ixts):
@@ -474,29 +346,6 @@ def projection(grid, w2cs, ixts):
 
 def modulate(x, shift, scale):
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
-
-class DiTBlock(nn.Module):
-    """
-    A DiT block with adaptive layer norm zero (adaLN-Zero) conditioning.
-    """
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
-
-    def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
 
 
 class FinalLayer(nn.Module):
@@ -707,6 +556,7 @@ class VolTransformer(L.LightningModule):
         x_up = torch.einsum('bcdhw->bdhwc',x_up).contiguous()
         return x_up
     
+    
 class Network(L.LightningModule):
     def __init__(self, cfg, specs, white_bkgd=True):
         super(Network, self).__init__()
@@ -774,14 +624,6 @@ class Network(L.LightningModule):
         # self.scaling_shift = np.log(0.5*0.5*self.voxel_size/3.0)
         self.scaling_shift = cfg.model.scaling_shift
 
-        # # VAE
-        # self.specs = specs
-        # in_channels = specs["VaeModelSpecs"]["in_channels"] # latent dim of pointnet 
-        # modulation_dim = specs["VaeModelSpecs"]["latent_dim"] # latent dim of modulation
-        # latent_std = specs.get("latent_std", 0.25) # std of target gaussian distribution of latent space
-        # hidden_dims = [modulation_dim, modulation_dim, modulation_dim, modulation_dim]
-        # self.vae_model = BetaVAE(in_channels=in_channels, latent_dim=modulation_dim, hidden_dims=hidden_dims, kl_std=latent_s)
-
         # triplane encodertd
         self.R = cfg.model.vol_embedding_reso
         in_channels = 3
@@ -794,62 +636,21 @@ class Network(L.LightningModule):
         # self.embed_dim = vol_embedding_dim
         self.tpv_agg = TPVAggregator(self.R,self.R,self.R)
 
-        # point transformer
-        # self.n_ctx = self.cfg.point_e.n_ctx
-        # self.width = self.cfg.point_e.width
-        # self.input_channels = self.cfg.point_e.input_channels
-        # self.pc_emb = nn.Parameter(torch.randn(self.input_channels, self.n_ctx), requires_grad=True)
-        # self.pc_transformer = DINOImagePointDiffusionTransformer(cfg=self.cfg, device="cuda", dtype=torch.float,
-        #                                                          n_ctx=self.n_ctx,
-        #                                                          width=self.width,
-        #                                                          layers=cfg.point_e.layers,
-        #                                                          input_channels=self.input_channels,
-        #                                                          output_channels=self.cfg.point_e.output_channels,
-        #                                                          time_token_cond=self.cfg.point_e.time_token_cond,
-        #                                                          token_cond=self.cfg.point_e.token_cond,
-        #                                                          cond_drop_prob=self.cfg.point_e.cond_drop_prob,
-        #                                                          depth=cfg.point_e.dit_block_depth)
-        #self.point_emb = nn.Parameter(torch.randn(self.n_ctx, 3), requires_grad=True)
-
         # triplane transformer
         self.trip_emb = nn.Parameter(torch.randn(3, self.vol_embedding_dim, self.R, self.R), requires_grad=True)
-        self.trip_transformer = TriplaneTokenTransformer(cfg=cfg, device="cuda", dtype=torch.float,
-                                                                 n_ctx=cfg.voxel_reso ** 2,
-                                                                 width=cfg.triplane_e.width,
-                                                                 layers=cfg.triplane_e.layers,
-                                                                 input_channels=cfg.triplane_e.input_channels,
-                                                                 output_channels=cfg.triplane_e.output_channels,
-                                                                 time_token_cond=cfg.triplane_e.time_token_cond,
-                                                                 token_cond=cfg.triplane_e.token_cond,
-                                                                 cond_drop_prob=cfg.triplane_e.cond_drop_prob,
-                                                                 depth=cfg.triplane_e.dit_block_depth)
+        self.trip_transformer = TriplaneTokenTransformer(cfg=cfg,
+                                                         device="cuda",
+                                                         dtype=torch.float32,
+                                                         n_ctx=cfg.voxel_reso ** 2,
+                                                         cross_attn_heads=cfg.triplane_e.cross_attn_heads,
+                                                         self_attn_heads=cfg.triplane_e.self_attn_heads,
+                                                         width=cfg.triplane_e.width,
+                                                         init_scale=cfg.triplane_e.init_scale,
+                                                         input_channels=cfg.triplane_e.input_channels,
+                                                         output_channels=cfg.triplane_e.output_channels,
+                                                         cond_drop_prob=cfg.triplane_e.cond_drop_prob,
+                                                         depth=cfg.triplane_e.crossattndit_block_depth)
         
-        # self.upsample = nn.Sequential(
-        #     # 1st layer: Upsample 8x8x8 -> 16x16x16
-        #     nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
-        #     nn.ReLU(inplace=True),
-        #     # 2nd layer: Upsample 16x16x16 -> 32x32x32
-        #     nn.ConvTranspose3d(in_channels=self.vol_embedding_dim, out_channels=self.vol_embedding_dim, kernel_size=4, stride=2, padding=1),
-        # )
-        
-        # # feat volume classifier
-        # self.vol_classifier = nn.Sequential(
-        #     # MLP(device='cuda', dtype=torch.float32, width=self.vol_embedding_dim, init_scale=float(1.0)),
-        #     # nn.GELU(),
-        #     nn.Linear(self.vol_embedding_dim, 1, device='cuda', dtype=torch.float32),
-        #     # nn.LeakyReLU(),
-        #     # nn.Linear(self.vol_embedding_dim//2, 1, device='cuda', dtype=torch.float32),
-        #     nn.Sigmoid()
-        # )
-
-        # # learnable parameters
-        # self.r = self.R
-        # self.offset = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 3), dtype=torch.float32)*0.78+0.16, requires_grad=True)
-        # self.shs = nn.Parameter(torch.randn((self.r, self.r, self.r, self.K, 4, 3), dtype=torch.float32), requires_grad=True)
-        # self.scaling = nn.Parameter(torch.ones((self.r, self.r, self.r, self.K, 2), dtype=torch.float32)*0.72-4.0, requires_grad=True)
-        # self.rotation = nn.Parameter(torch.rand((self.r, self.r, self.r, self.K, 4), dtype=torch.float32)*0.66-0.22, requires_grad=True)
-        # opacity = inverse_sigmoid(0.1 * torch.ones((self.r, self.r, self.r, self.K, 1), dtype=torch.float32))
-        # self.opacity = nn.Parameter(opacity, requires_grad=True)
 
     def build_dense_grid(self, reso):
         array = torch.arange(reso, device=self.device)
@@ -1053,51 +854,27 @@ class Network(L.LightningModule):
 
         return feature_point_cloud
 
-    def fuse_feature(self, images, fragments, cameras, image_size, num_pts_sampled=8192, scale=1, dino=True):
-        if dino:
-            to_tensor = transforms.ToTensor()
-            input_images = []
-            img_masks = []
-            orignal_sizes = []
-            bboxes = []
-            
-            for i in range(images.shape[0]):
-                image = images.cpu().numpy()[i, :, :, :3]
+    def fuse_feature(self, images, masks):
+        to_tensor = transforms.ToTensor()
+        input_images = []
+        
+        for i in range(images.shape[0]):
+            image = images.cpu().numpy()[i]
+            image_mask = masks[i].cpu().numpy() != 0
+            crop_size = (420, 420)
 
-                # image_np = (image * 255).astype('uint8')
-                # output_path = "/home/hongli/anything6d/cropped/image.jpg"
-                # cv2.imwrite(output_path, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR))
+            crop_image, _, _ = center_crop(image, image_mask, crop_size)
+            cropped_image_np = cv2.resize(crop_image, crop_size, interpolation=cv2.INTER_AREA)
 
-                # image_mask = images[i, ..., 3].cpu().numpy() != 0
-                # crop_size = (420, 420)
-                # crop_image, crop_mask, bbox = center_crop(image, image_mask, crop_size)
-                # cropped_image_np = cv2.resize(crop_image, crop_size, interpolation=cv2.INTER_AREA)
+            input_image = to_tensor(cropped_image_np).to("cuda")
+            input_image = input_image.unsqueeze(0)
+            input_images.append(input_image)
 
-                # cropped_image_np = (cropped_image_np * 255).astype('uint8')
-                # output_path = "/home/hongli/anything6d/cropped/cropped_image.jpg" # 或 "cropped_image.png"
-                # cv2.imwrite(output_path, cv2.cvtColor(cropped_image_np, cv2.COLOR_RGB2BGR))
+        input_images = torch.cat(input_images, dim=0)
 
-                # cropped_mask = cv2.resize(crop_mask*1.0, crop_size, interpolation=cv2.INTER_NEAREST)!=0  # Use nearest neighbor interpolation for masks
-                # orignal_size = (int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1]))  # K,K
-                # orignal_sizes.append(orignal_size)
-                # bboxes.append(bbox)
+        descs, descs_cls, descs_unflat = self.img_encoder(input_images)  # (B,900,384)
 
-                # input_image = to_tensor(cropped_image_np).to("cuda")
-                input_image = to_tensor(image).to("cuda")
-                input_image = input_image.unsqueeze(0)
-                # input_image = self.img_encoder.preprocess_pil(input_image)
-                input_images.append(input_image)
-
-                # img_mask = to_tensor(image_mask).to("cuda")
-                # img_masks.append(img_mask)
-
-            input_images = torch.cat(input_images, dim=0)
-            # img_masks = torch.cat(img_masks, dim=0).unsqueeze(-1)
-
-            # visualize_images(input_images, num_rows=int(input_images.shape[0]/self.cfg.n_views), num_cols=self.cfg.n_views)
-            #########################################################
-            descs, descs_cls = self.img_encoder(input_images)  # (B,900,384)
-        return descs, descs_cls
+        return descs, descs_cls, descs_unflat
 
     
     def voxel_projection(self, points, voxel_resolution=16, aug=False):
@@ -1187,12 +964,13 @@ class Network(L.LightningModule):
         B,N,H,W,C = batch['tar_occluded_rgb'][:,:n_views_sel].shape
         #
         _inps = batch['tar_occluded_rgb'][:,:n_views_sel].reshape(B*n_views_sel,H,W,C)
+        _inps_mask = batch['mask'][:,:n_views_sel].reshape(B*n_views_sel,H,W)
 
         ########################################################
         # cameras, images, fragments = self.get_batch_view(batch, n_views_sel, scale=1)
         # images = self.get_batch_view(batch, n_views_sel, scale=1)
-        dino_feat, dino_cls = self.fuse_feature(_inps, fragments=None, cameras=None, image_size=[420,420],num_pts_sampled=1024, scale=1,dino=True)
-        # dino_feat (B*N, 900, 384), dino_cls (B*N, 384)
+        dino_feat, dino_cls, dino_feat_unflat = self.fuse_feature(_inps, _inps_mask)
+        # dino_feat (B*N, 900, 384), dino_cls (B*N, 384), dino_feat_unflat (B*N, 384, 30, 30)
         ########################################################
 
         ########################################################

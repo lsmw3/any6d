@@ -54,17 +54,15 @@ model:
 
 triplane_e:
     cond_drop_prob: 0.1
-    heads: 6
+    self_attn_heads: 16
+    cross_attn_heads: 8
     init_scale: 0.25
-    layers: 6
     # n_ctx: 256
     embedding_channels: 128
     input_channels: 384
     output_channels: 384
-    time_token_cond: True
-    token_cond: True
     width: 256
-    dit_block_depth: 4
+    crossattndit_block_depth: 10
 
 train_dataset:
     dataset_name: custom # shapenet_temp housecat6d
