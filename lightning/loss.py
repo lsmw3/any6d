@@ -109,4 +109,4 @@ class Losses(nn.Module):
                 # else:
                 #     raise NotImplementedError("There's no predicted occupance volume in the output!!!")
      
-        return loss, scalar_stats
+        return loss*2, scalar_stats

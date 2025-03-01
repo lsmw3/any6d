@@ -3,3 +3,4 @@ wandb/
 temp_test/
 ckpt/
 temp.ipynb
+**/__pycache__/

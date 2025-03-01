@@ -75,9 +75,9 @@ def main(cfg, specs):
         save_after_epoch=cfg.train.start_save,
         dirpath=os.path.join(cfg.logger.dir, "oclu-fine-16-renrm"),
         filename='vol_render_{epoch}',
-        # monitor='val loss',
+        monitor='val loss',
         # save_last=True,
-        save_top_k=-1,             # Set to -1 to save all checkpoints
+        save_top_k=3,             # Set to -1 to save all checkpoints
         every_n_epochs=cfg.train.save_ckpt_every_n_epoch,
         save_on_train_epoch_end=True
     )
