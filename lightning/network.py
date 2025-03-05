@@ -587,7 +587,8 @@ class Network(L.LightningModule):
 
         # build volume position
         self.grid_reso = cfg.model.vol_embedding_reso
-        self.voxel_size = 2*self.scene_size/(self.grid_reso)
+        self.upsample_ratio = cfg.model.upsample_ratio
+        self.voxel_size = 2*self.scene_size/(self.grid_reso*self.upsample_ratio)
         # self.register_buffer("dense_grid", self.build_dense_grid(self.grid_reso))
         # self.register_buffer("centers", self.build_dense_grid(self.grid_reso*2))
 
@@ -603,8 +604,7 @@ class Network(L.LightningModule):
         # self.register_buffer("volume_grid", self.build_dense_grid(self.feat_vol_reso))
         
         # grouping configuration
-        self.n_offset_groups = cfg.model.vol_embedding_reso # 16
-        self.register_buffer("group_centers", self.build_dense_grid(self.grid_reso))
+        self.register_buffer("group_centers", self.build_dense_grid(self.grid_reso*self.upsample_ratio))
         # self.group_centers = self.group_centers.reshape(1,-1,3)
         self.group_centers = self.group_centers.reshape(1,*self.group_centers.shape)
 
@@ -650,6 +650,18 @@ class Network(L.LightningModule):
                                                          output_channels=cfg.triplane_e.output_channels,
                                                          cond_drop_prob=cfg.triplane_e.cond_drop_prob,
                                                          depth=cfg.triplane_e.crossattndit_block_depth)
+
+        # feature volume upsampler
+        self.upsample = nn.ConvTranspose3d(
+                            in_channels=cfg.feature_vol_upsampler.in_channels,
+                            out_channels=cfg.feature_vol_upsampler.out_channels,
+                            kernel_size=cfg.feature_vol_upsampler.kernel_size,
+                            stride=cfg.feature_vol_upsampler.stride,
+                            padding=0,
+                            output_padding=0,
+                            bias=True
+                        )
+
         
 
     def build_dense_grid(self, reso):
@@ -694,7 +706,7 @@ class Network(L.LightningModule):
     def get_offseted_pt(self, offset, K, center_pt=None):
         B = offset.shape[0]
         if center_pt is None:
-            half_cell_size = self.scene_size/self.n_offset_groups # 0.5*self.voxel_size
+            half_cell_size = 0.5*self.voxel_size # 0.5*self.voxel_size
             centers = self.group_centers.unsqueeze(-2).expand(B,-1,-1,-1,K,-1) + offset*half_cell_size
         else:
             assert offset.shape == center_pt.shape
@@ -1003,13 +1015,11 @@ class Network(L.LightningModule):
         pred_proj_feat_list = [pred_proj_feat_list[...,i] for i in range(3)] # (List[(B*N, R*R, 128)]*3)
 
         feat_vol = self.tpv_agg(pred_proj_feat_list).reshape(B*N,-1,self.R,self.R,self.R) # (B*N, 128, 16, 16, 16)
-        # feat_vol_upsampled = self.upsample(feat_vol)
+        feat_vol = self.upsample(feat_vol) # (B*N, 128, 32, 32, 32)
+        R_up = feat_vol.shape[-1]
+        assert R_up // self.R == self.upsample_ratio
 
-        # pred_volume = self.vol_classifier(feat_vol.permute(0, 2, 3, 4, 1)).squeeze(-1) # (B*N, 16, 16, 16)
-        volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 16, 16, 16, 128)
-        # volume_feature = feat_vol.permute(0, 2, 3, 4, 1).reshape(B*N, -1, self.vol_embedding_dim)
-        # feat_mask = torch.round(gt_volume).reshape(B*N, -1) # (B*N, 16*16*16)
-        # feat_mask = torch.round(pred_volume) # (B*N, 16, 16, 16)
+        volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 32, 32, 32, 128)
 
         proj_feats_vis = pred_proj_feat.reshape(B*N,-1,3,self.vol_embedding_dim).reshape(B*N,-1,self.vol_embedding_dim) # (B*N, 3*R*R, C_proj)
 
@@ -1017,7 +1027,7 @@ class Network(L.LightningModule):
         # volume_feat_up = self.vol_decoder(feat_vol)
 
         # rendering
-        _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, self.R)
+        _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, R_up)
         
         _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16, 16, 16, K, 3)
 

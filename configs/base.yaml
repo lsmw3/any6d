@@ -1,4 +1,4 @@
-gpu_id: [0]
+gpu_id: [0, 1, 2, 3]
 
 exp_name: LaRa/release-test
 n_views: 1
@@ -10,7 +10,7 @@ model:
     n_groups: [4]  # n_groups for local attention
     # n_offset_groups: 32     # offset radius of 1/n_offset_groups of the scene size
 
-    K: 16  # primitives per-voxel
+    K: 4  # primitives per-voxel
     sh_degree: 1    # view dependent color
 
     # num_layers: 6 # 12
@@ -33,24 +33,13 @@ model:
 
     scene_size: 0.5
     opacity_shift: -2.1729
-    scaling_shift: -4.5
+    scaling_shift: -5
+
+    upsample_ratio: 2
 
     opacity_threshold: 0.02
 
     # ckpt_path: logs/LaRa/release-test/oclu-fine-16/vol_render_epoch=3999.ckpt # specify a ckpt path if you want to continue training  
-
-# point_e:
-#     cond_drop_prob: 0.1
-#     heads: 8
-#     init_scale: 0.25
-#     layers: 6
-#     n_ctx: 1024
-#     input_channels: 128
-#     output_channels: 3
-#     time_token_cond: True
-#     token_cond: True
-#     width: 256
-#     dit_block_depth: 4
 
 triplane_e:
     cond_drop_prob: 0.1
@@ -63,6 +52,12 @@ triplane_e:
     output_channels: 384
     width: 256
     crossattndit_block_depth: 10
+
+feature_vol_upsampler:
+    in_channels: 128
+    out_channels: 128
+    kernel_size: 2
+    stride: 2
 
 train_dataset:
     dataset_name: custom # shapenet_temp housecat6d
@@ -92,7 +87,7 @@ test_dataset:
 
 train:
     batch_size: 32
-    lr: 1e-3
+    lr: 2e-4
     beta1: 0.9
     beta2: 0.95
     weight_decay: 0.05
@@ -103,11 +98,11 @@ train:
     limit_val_batches: 1.0 # 0.02
     save_ckpt_every_n_epoch: 10
     check_val_every_n_epoch: 5
-    log_train_every_n_step: 100
-    start_save: 100
-    start_fine: 100
+    log_train_every_n_step: 300
+    start_save: 200
+    start_fine: 200
     lambda_normal: 0.2
-    start_normal: 150
+    start_normal: 350
 test:
     batch_size: 32
     log_val_every_n_step: 10

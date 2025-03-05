@@ -63,7 +63,7 @@ class Losses(nn.Module):
 
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
-                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*2 + color_loss_all[mask.expand(-1, -1, -1, 3) == 0].mean()
+                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*5 + color_loss_all[mask.expand(-1, -1, -1, 3) == 0].mean()
                 # loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
@@ -109,4 +109,4 @@ class Losses(nn.Module):
                 # else:
                 #     raise NotImplementedError("There's no predicted occupance volume in the output!!!")
      
-        return loss*2, scalar_stats
+        return loss, scalar_stats
