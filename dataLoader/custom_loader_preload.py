@@ -61,9 +61,9 @@ class custom_loader_preload(torch.utils.data.Dataset):
 
         if self.split=='train':
             inps_id = random.sample(view_ids[4:-4], k=1)
-            view_id = inps_id + random.sample(list(set(view_ids[4:-4])-set(inps_id)), k=4)
+            view_id = inps_id + random.sample(list(set(view_ids[4:-4])-set(inps_id)), k=1) #k=4
         else:
-            view_id = random.sample(list(view_ids[:4]) + list(view_ids[-4:]), k=5)
+            view_id = random.sample(list(view_ids[:4]) + list(view_ids[-4:]), k=1) #k=5
         
         # view_id = [16]
         

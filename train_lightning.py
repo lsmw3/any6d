@@ -76,7 +76,7 @@ def main(cfg, specs):
         dirpath=os.path.join(cfg.logger.dir, "oclu-fine-16-crossattn"),
         filename='vol_render_{epoch}',
         monitor='val loss',
-        # save_last=True,
+        #save_last=True,
         save_top_k=3,             # Set to -1 to save all checkpoints
         every_n_epochs=cfg.train.save_ckpt_every_n_epoch,
         save_on_train_epoch_end=True
@@ -106,7 +106,7 @@ def main(cfg, specs):
         my_system, 
         train_dataloaders=train_loader,
         val_dataloaders=val_loader,
-        # ckpt_path=cfg.model.ckpt_path
+        #ckpt_path=cfg.model.ckpt_path
         )
     
     dt = datetime.now() - t0

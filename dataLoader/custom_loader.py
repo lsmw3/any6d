@@ -115,6 +115,7 @@ class custom_loader(torch.utils.data.Dataset):
                     'transform_mats': transform_mats,
                     'bg_color': bg_colors,
                     'tar_volume': volume
+
                     })
         
         if self.cfg.load_normal:

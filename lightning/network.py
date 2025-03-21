@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import clip
 import open_clip
 
-from lightning.renderer_2dgs import Renderer
+from lightning.renderer_3d_feat_gs import Renderer
 from lightning.utils import MiniCam
 from lightning.extractor import ViTExtractor
 from lightning.voxelization import center_crop, patch2pixel_feats, patch2pixel
@@ -399,16 +399,21 @@ class Decoder(L.LightningModule):
 
         self.K = K
         self.sh_dim = sh_dim # 12
+        feat_dim = 16
+        self.feat_dim = feat_dim # 3
         self.opacity_dim = opacity_dim # 1
         self.scaling_dim = scaling_dim # 2
         self.rotation_dim  = rotation_dim # 4
-        self.out_dim = 3 + sh_dim + opacity_dim + scaling_dim + rotation_dim
+        self.out_dim = 3 + sh_dim + feat_dim + opacity_dim + scaling_dim + rotation_dim 
         # self.out_dim = sh_dim + opacity_dim + scaling_dim + rotation_dim # 19 # no need to predict position anymore
 
         num_layer = coarse_mlp_layers
+        #layers_coarse = [nn.Linear(in_dim, self.out_dim*K)]
+        
         layers_coarse = [nn.Linear(in_dim, in_dim), nn.ReLU()] + \
                  [nn.Linear(in_dim, in_dim), nn.ReLU()] * (num_layer-1) + \
                  [nn.Linear(in_dim, self.out_dim*K)]
+        
         self.mlp_coarse = nn.Sequential(*layers_coarse)
 
 
@@ -441,7 +446,7 @@ class Decoder(L.LightningModule):
     def forward_coarse(self, feats, opacity_shift, scaling_shift, R):
         parameters = self.mlp_coarse(feats).float() # (B*N, 16*16*16, K*(3+19))
         parameters = parameters.view(*parameters.shape[:-1],self.K,-1) # (B, 16*16*16, K, 3+19)
-        offset, sh, opacity, scaling, rotation = torch.split(parameters, [3, self.sh_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
+        offset, sh,feature, opacity, scaling, rotation = torch.split(parameters, [3, self.sh_dim,self.feat_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
         # sh, opacity, scaling, rotation = torch.split(parameters, [self.sh_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
         opacity = opacity + opacity_shift
         scaling = scaling + scaling_shift
@@ -449,12 +454,13 @@ class Decoder(L.LightningModule):
 
         B = opacity.shape[0]
         sh = sh.view(B,R,R,R,self.K,self.sh_dim//3,3) # (B, 16, 16, 16, K, 4, 3)
+        feature = feature.view(B,R,R,R,self.K,1,self.feat_dim) # (B, 16, 16, 16, K, 3)
         opacity = opacity.view(B,R,R,R,self.K,self.opacity_dim) # (B, 16, 16, 16, K, 1)
         scaling = scaling.view(B,R,R,R,self.K,self.scaling_dim) # (B, 16, 16, 16, K, 2)
         rotation = rotation.view(B,R,R,R,self.K,self.rotation_dim) # (B, 16, 16, 16, K, 4)
         offset = offset.view(B,R,R,R,self.K,3) # (B, 16, 16, 16, K, 3)
         
-        return offset, sh, scaling, rotation, opacity
+        return offset, sh, feature, scaling, rotation, opacity
         # return sh, scaling, rotation, opacity
 
     def forward_fine(self, volume_feat, point_feats):
@@ -544,17 +550,17 @@ class VolTransformer(L.LightningModule):
         x = self.pos_embed.repeat(B,1,1,1,1)
         x+= volume_feats
 
-        for i, layer in enumerate(self.layers):
-            group_idx = i%len(self.block_size)
-            x = layer(x, volume_feats, self.n_groups[group_idx], self.block_size[group_idx])
+        # for i, layer in enumerate(self.layers):
+        #     group_idx = i%len(self.block_size)
+        #     x = layer(x, volume_feats, self.n_groups[group_idx], self.block_size[group_idx])
 
-        x = self.norm(torch.einsum('bcdhw->bdhwc',x))
-        x = torch.einsum('bdhwc->bcdhw',x)
+        # x = self.norm(torch.einsum('bcdhw->bdhwc',x))
+        # x = torch.einsum('bdhwc->bcdhw',x)
 
-        # separate each plane and apply deconv
-        x_up = self.deconv(x)  # [3*N, D', H', W']
-        x_up = torch.einsum('bcdhw->bdhwc',x_up).contiguous()
-        return x_up
+        # # separate each plane and apply deconv
+        # x_up = self.deconv(x)  # [3*N, D', H', W']
+        # x_up = torch.einsum('bcdhw->bdhwc',x_up).contiguous()
+        return x
     
     
 class Network(L.LightningModule):
@@ -595,12 +601,15 @@ class Network(L.LightningModule):
         # # build volume transformer
         # self.n_groups = cfg.model.n_groups
         self.vol_embedding_dim = cfg.model.embedding_dim
+        
+        # 
         # self.vol_decoder = VolTransformer(
         #     embed_dim=self.vol_embedding_dim, image_feat_dim=encoder_feat_dim,
-        #     vol_low_res=self.grid_reso, vol_high_res=self.grid_reso*2, out_dim=cfg.model.vol_embedding_out_dim, n_groups=self.n_groups,
-        #     num_layers=cfg.model.num_layers, num_heads=cfg.model.num_heads, img_feats_avg = cfg.model.img_feats_avg
+        #     vol_low_res=self.grid_reso, vol_high_res=self.grid_reso*2, out_dim=cfg.model.vol_embedding_out_dim, n_groups=cfg.model.n_groups,
+        #     num_layers=3, num_heads=cfg.model.num_heads, img_feats_avg = None
         # )
-        # self.feat_vol_reso = cfg.model.vol_feat_reso
+
+        #self.feat_vol_reso = cfg.model.vol_feat_reso
         # self.register_buffer("volume_grid", self.build_dense_grid(self.feat_vol_reso))
         
         # grouping configuration
@@ -610,7 +619,7 @@ class Network(L.LightningModule):
 
         # 2DGS model
         self.sh_dim = (cfg.model.sh_degree+1)**2*3
-        self.scaling_dim, self.rotation_dim = 2, 4
+        self.scaling_dim, self.rotation_dim = 3, 4
         self.opacity_dim = 1
         self.out_dim = self.sh_dim + self.scaling_dim + self.rotation_dim + self.opacity_dim
 
@@ -629,7 +638,7 @@ class Network(L.LightningModule):
         in_channels = 3
         mid_channels = self.vol_embedding_dim
         self.eps= 1e-6
-        self.projection = Projection(self.R, in_channels, mid_channels, eps=self.eps)
+        #self.projection = Projection(self.R, in_channels, mid_channels, eps=self.eps)
 
         # debug embedding
         # self.latent = nn.Parameter(torch.randn(1, modulation_dim),requires_grad=False)
@@ -637,11 +646,12 @@ class Network(L.LightningModule):
         self.tpv_agg = TPVAggregator(self.R,self.R,self.R)
 
         # triplane transformer
-        self.trip_emb = nn.Parameter(torch.randn(3, self.vol_embedding_dim, self.R, self.R), requires_grad=True)
+        self.trip_emb = nn.Parameter(torch.randn(self.vol_embedding_dim, self.R, self.R,3) * (1. / self.vol_embedding_dim) ** 0.5, requires_grad=True)
+        
         self.trip_transformer = TriplaneTokenTransformer(cfg=cfg,
                                                          device="cuda",
                                                          dtype=torch.float32,
-                                                         n_ctx=cfg.voxel_reso ** 2,
+                                                         n_ctx=cfg.voxel_reso ** 2*3,
                                                          cross_attn_heads=cfg.triplane_e.cross_attn_heads,
                                                          self_attn_heads=cfg.triplane_e.self_attn_heads,
                                                          width=cfg.triplane_e.width,
@@ -651,7 +661,7 @@ class Network(L.LightningModule):
                                                          cond_drop_prob=cfg.triplane_e.cond_drop_prob,
                                                          depth=cfg.triplane_e.crossattndit_block_depth)
 
-        # feature volume upsampler
+        #feature volume upsampler
         self.upsample = nn.ConvTranspose3d(
                             in_channels=cfg.feature_vol_upsampler.in_channels,
                             out_channels=cfg.feature_vol_upsampler.out_channels,
@@ -662,6 +672,27 @@ class Network(L.LightningModule):
                             bias=True
                         )
 
+        self.speedup_conv = nn.Sequential(
+            nn.Conv1d(in_channels=16, out_channels=64, kernel_size=1),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(in_channels=64, out_channels=384, kernel_size=1),
+        )
+        # # initiliaze feature embedding
+        # self.feat_embed = nn.Parameter(
+        #         torch.randn(1, self.R*self.upsample_ratio, self.R*self.upsample_ratio, self.R*self.upsample_ratio, self.K, 1, 3, device=self.device),
+        #         requires_grad=True
+        #     )
+
+        # # initiliaze feature embedding
+        # feat volume classifier
+        self.vol_classifier = nn.Sequential(
+            # MLP(device='cuda', dtype=torch.float32, width=self.vol_embedding_dim, init_scale=float(1.0)),
+            # nn.GELU(),
+            nn.Linear(self.vol_embedding_dim, 1, device='cuda', dtype=torch.float32),
+            # nn.LeakyReLU(),
+            # nn.Linear(self.vol_embedding_dim//2, 1, device='cuda', dtype=torch.float32),
+            nn.Sigmoid()
+        )
         
 
     def build_dense_grid(self, reso):
@@ -889,6 +920,7 @@ class Network(L.LightningModule):
         return descs, descs_cls, descs_unflat
 
     
+
     def voxel_projection(self, points, voxel_resolution=16, aug=False):
         R = voxel_resolution
         in_channels = 384
@@ -972,7 +1004,7 @@ class Network(L.LightningModule):
     def forward(self, batch, with_fine, return_buffer=False):
         ########################################################
         n_views_sel = self.cfg.n_views
-        assert n_views_sel == 1, "It's not single-view input!!"
+        assert n_views_sel == 1, "It's single-view input!!"
         B,N,H,W,C = batch['tar_occluded_rgb'][:,:n_views_sel].shape
         #
         _inps = batch['tar_occluded_rgb'][:,:n_views_sel].reshape(B*n_views_sel,H,W,C)
@@ -1002,37 +1034,52 @@ class Network(L.LightningModule):
             label_cls = dino_cls
         ########################################################
 
-        gt_volume = batch['tar_volume']
-        replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
-        gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
-        
-        input_trip_token = self.trip_emb.reshape(-1, self.R*self.R).unsqueeze(0).expand(B*N, -1, -1) # (B*N, 3*C_proj, R*R) -> (B*N, 3*128, 256)
 
-        pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
-        # pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
+        input_trip_token = self.trip_emb.reshape(-1, self.R*self.R*3).unsqueeze(0).expand(B*N, -1, -1) # (B*N, C_proj, R*R*3) -> (B*N, 128, 16*16*3)
 
-        pred_proj_feat_list = pred_proj_feat.reshape(B*N, -1, self.vol_embedding_dim, 3) # (B*N, R*R, 128, 3)
+        pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 768, 128)
+        #pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, RR3, C)
+
+        pred_proj_feat_list = pred_proj_feat.reshape(B*N, -1, 3, self.vol_embedding_dim).permute(0,1,3,2) # (B*N, R*R, 128, 3)
         pred_proj_feat_list = [pred_proj_feat_list[...,i] for i in range(3)] # (List[(B*N, R*R, 128)]*3)
 
         feat_vol = self.tpv_agg(pred_proj_feat_list).reshape(B*N,-1,self.R,self.R,self.R) # (B*N, 128, 16, 16, 16)
-        feat_vol = self.upsample(feat_vol) # (B*N, 128, 32, 32, 32)
-        R_up = feat_vol.shape[-1]
-        assert R_up // self.R == self.upsample_ratio
-
+        
+        
+        #feat_vol = self.vol_decoder(feat_vol) # (B*N, 128, 32, 32, 32)
+        
         volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 32, 32, 32, 128)
+        
+        
+        gt_volume = batch['tar_volume']
+        
+        replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
+        gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
 
-        proj_feats_vis = pred_proj_feat.reshape(B*N,-1,3,self.vol_embedding_dim).reshape(B*N,-1,self.vol_embedding_dim) # (B*N, 3*R*R, C_proj)
+        pred_volume = self.vol_classifier(volume_feature).squeeze(-1) # (B*N, 16, 16, 16)
+
+        proj_feats_vis = pred_proj_feat.reshape(B*N,self.R,self.R,3,-1) # (B*N, R*R*3, C_proj)
 
         # ########################################################
         # volume_feat_up = self.vol_decoder(feat_vol)
 
-        # rendering
-        _offset_coarse, _shs_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, R_up)
-        
+        # # rendering
+        feat_vol = self.upsample(feat_vol) # (B*N, 128, 32, 32, 32)
+        volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 32, 32, 32, 128)
+        R_up = feat_vol.shape[-1]
+        assert R_up // self.R == self.upsample_ratio
+        _offset_coarse, _shs_coarse,_feature_coarse, _scaling_coarse, _rotation_coarse, _opacity_coarse = self.decoder.forward_coarse(volume_feature, self.opacity_shift, self.scaling_shift, R_up)
         _centers_coarse = self.get_offseted_pt(_offset_coarse, self.K) # (B*N, 16, 16, 16, K, 3)
+
+        # create feature for rendering
+        BN, _D, _H, _W,_K,_= _centers_coarse.shape
+
+        #_feature_coarse = torch.randn(BN, _D,_H,_W,_K,1, 3, device=self.device) # (B*N, 16*16*16, 128)
+        #_feature_coarse = self.feat_embed.expand(BN, -1, -1, -1, -1, -1,-1) # (B*N, 16, 16, 16, K, 3)
 
         _opacity_coarse_tmp = self.gs_render.opacity_activation(_opacity_coarse).squeeze(-1) # (B*N, 16, 16, 16, K)
         masks = _opacity_coarse_tmp > self.cfg.model.opacity_threshold
+        #print(masks.shape)
         render_img_scale = batch.get('render_img_scale', 1.0)
         
         # volume_feat_up = volume_feat_up.view(B,-1,volume_feat_up.shape[-1])
@@ -1048,9 +1095,12 @@ class Network(L.LightningModule):
 
             _centers = _centers_coarse[i].view(-1, *_centers_coarse.shape[5:])
             _shs = _shs_coarse[i].view(-1, *_shs_coarse.shape[5:])
+            _features = _feature_coarse[i].view(-1, *_feature_coarse.shape[5:])
             _opacity = _opacity_coarse[i].view(-1, *_opacity_coarse.shape[5:])
             _scaling = _scaling_coarse[i].view(-1, *_scaling_coarse.shape[5:])
             _rotation = _rotation_coarse[i].view(-1, *_rotation_coarse.shape[5:])
+
+            #print(_centers.shape, _shs.shape, _features.shape, _opacity.shape, _scaling.shape, _rotation.shape)
 
             if return_buffer:
                 render_pkg.append((_centers, _shs, _opacity, _scaling, _rotation))
@@ -1066,42 +1116,56 @@ class Network(L.LightningModule):
                 rays_d = batch['tar_rays'][i,j]
                 
                 # coarse
-                frame = self.gs_render.render_img(cam, rays_d, _centers, _shs, _opacity, _scaling, _rotation, self.device)
+                frame = self.gs_render.render_img(cam, rays_d, _centers, _shs,_features, _opacity, _scaling, _rotation, self.device)
                 outputs_view.append(frame)
 
             rendering_coarse = {k: torch.stack([d[k] for d in outputs_view[:n_views_sel]]) for k in outputs_view[0]}
 
-            if with_fine:
+            # if with_fine:
                     
-                mask = self._check_mask(mask)
-                point_feats, mask = self.get_point_feats(i, _inps[i], rendering_coarse, n_views_sel, batch, _centers, mask)
+            #     mask = self._check_mask(mask)
+            #     point_feats, mask = self.get_point_feats(i, _inps[i], rendering_coarse, n_views_sel, batch, _centers, mask)
 
-                _centers = _centers[mask]
-                point_feats =  torch.einsum('lcb->blc', point_feats)
+            #     _centers = _centers[mask]
+            #     point_feats =  torch.einsum('lcb->blc', point_feats)
 
-                volume_point_feat = feat_vol[i].permute(1, 2, 3, 0).reshape(-1, self.vol_embedding_dim).unsqueeze(1).expand(-1,self.K,-1)[mask.view(-1,self.K)]
-                _shs_fine = self.decoder.forward_fine(volume_point_feat, point_feats).view(-1,*_shs.shape[-2:]) + _shs[mask]
+            #     volume_point_feat = feat_vol[i].permute(1, 2, 3, 0).reshape(-1, self.vol_embedding_dim).unsqueeze(1).expand(-1,self.K,-1)[mask.view(-1,self.K)]
+            #     _shs_fine = self.decoder.forward_fine(volume_point_feat, point_feats).view(-1,*_shs.shape[-2:]) + _shs[mask]
                 
-                if return_buffer:
-                    render_pkg.append((_centers, _shs_fine, _opacity, _scaling, _rotation, mask))
+            #     if return_buffer:
+            #         render_pkg.append((_centers, _shs_fine, _opacity, _scaling, _rotation, mask))
                     
-                for j, c2w in enumerate(tar_c2ws):
+            #     for j, c2w in enumerate(tar_c2ws):
                     
-                    bg_color = batch['bg_color'][i,j]
-                    self.gs_render.set_bg_color(bg_color)
+            #         bg_color = batch['bg_color'][i,j]
+            #         self.gs_render.set_bg_color(bg_color)
                 
-                    rays_d = batch['tar_rays'][i,j]
-                    cam = MiniCam(c2w, width, height, fovy, fovx, znear, zfar, self.device)
-                    frame_fine = self.gs_render.render_img(cam, rays_d, _centers, _shs_fine, _opacity[mask], _scaling[mask], _rotation[mask], self.device, prex='_fine')
-                    outputs_view[j].update(frame_fine)
+            #         rays_d = batch['tar_rays'][i,j]
+            #         cam = MiniCam(c2w, width, height, fovy, fovx, znear, zfar, self.device)
+            #         frame_fine = self.gs_render.render_img(cam, rays_d, _centers, _shs_fine, _opacity[mask], _scaling[mask], _rotation[mask], self.device, prex='_fine')
+            #         outputs_view[j].update(frame_fine)
             
             outputs.append({k: torch.cat([d[k] for d in outputs_view], dim=1) for k in outputs_view[0]})
         
         outputs = {k: torch.stack([d[k] for d in outputs]) for k in outputs[0]}
         if return_buffer:
             outputs.update({'render_pkg':render_pkg})
-        
+        #outputs = {}
         outputs.update({'feat_vol':feat_vol.detach()})
         outputs.update({'proj_feats_vis':proj_feats_vis})
+        
+        #pass gt
+        B, N, H, W, C = batch['tar_rgb'].shape
+        tar_rgb = batch['tar_rgb'].reshape(B*N,H,W,C).permute(0,3,1,2) # 5 3 420 42t0
+        _, _, tar_feature = self.img_encoder(tar_rgb)
+        tar_feature = tar_feature.reshape(B*N,384,-1) #  5 384 900
+        outputs.update({'tar_feature':tar_feature}) # 
 
+        features = outputs['feature_map'].reshape(B, 420, 420,N,-1).permute(0,3,4,1,2).reshape(B*N,-1,420,420) # 5 C 420 420
+        features = F.interpolate(features, size=(30,30), mode='bilinear', align_corners=False).reshape(B*N,-1,900) # 5 C 30 30
+        features_final = self.speedup_conv(features)
+        outputs.update({'pred_feature':features_final})
+
+        outputs.update({'pred_volume': pred_volume})
+        outputs.update({'gt_volume':gt_volume})
         return outputs

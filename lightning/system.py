@@ -13,6 +13,7 @@ from lightning.visualization import visualize_volume_with_cubes, visualize_cente
 from lightning.network import Network
 import matplotlib.pyplot as plt
 import os
+import wandb
 
 class system(L.LightningModule):
     def __init__(self, cfg, specs):
@@ -36,15 +37,15 @@ class system(L.LightningModule):
         loss, scalar_stats = self.loss(batch, output, start_normal=self.current_epoch>=self.cfg.train.start_normal, lambda_normal=self.cfg.train.lambda_normal)
 
         for key, value in scalar_stats.items():
-            if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm']:
+            if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm','feat','depth']:
                 self.log(f'train/{key}', value, sync_dist=True)
 
         self.logger.experiment.log({'lr':self.trainer.optimizers[0].param_groups[0]['lr']})
 
         if 0 == self.trainer.global_step % self.cfg.train.log_train_every_n_step and (self.trainer.local_rank == 0):
             self.vis_results(output, batch, prex='train')
-            # self.vis_results_aux(output, batch, prex='train')
-            # self.vis_volume(output, prex='train')
+            #self.vis_results_aux(output, batch, prex='train')
+            self.vis_volume(output, prex='train')
             
         torch.cuda.empty_cache()
 
@@ -56,7 +57,7 @@ class system(L.LightningModule):
         loss, scalar_stats = self.loss(batch, output, start_normal=self.current_epoch>=self.cfg.train.start_normal, lambda_normal=self.cfg.train.lambda_normal)
 
         for key, value in scalar_stats.items():
-            prog_bar = True if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm'] else False
+            prog_bar = True if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm','feat','depth'] else False
             self.log(f'val/{key}', value, prog_bar=prog_bar, sync_dist=True)
 
         if 0 == self.total_val_steps % self.cfg.test.log_val_every_n_step:
@@ -127,37 +128,38 @@ class system(L.LightningModule):
                 self.logger.log_image(f'{prex}/{key}', imgs, step=self.global_step)
         self.net.train()
 
-    # def vis_volume(self, output, prex):
-    #     pred_volume = output['pred_volume'].detach().cpu().numpy()
-    #     gt_volume = output['gt_volume'].detach().cpu().numpy()
+    def vis_volume(self, output, prex):
+        pred_volume = output['pred_volume'].detach().cpu().numpy()
+        gt_volume = output['gt_volume'].detach().cpu().numpy()
 
-    #     batch, num_views = gt_volume.shape[0] // self.cfg.n_views, self.cfg.n_views
-    #     for i in range(batch):
-    #         vis_pred_vols = []  # Store prediction paths for later logging
-    #         for j in range(num_views):
-    #             pred_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/pred_vol_{j}.png')
+        batch, num_views = gt_volume.shape[0] // self.cfg.n_views, self.cfg.n_views
+        for i in range(batch):
+            vis_pred_vols = []  # Store prediction paths for later logging
+            for j in range(num_views):
+                os.makedirs('vol_figs', exist_ok=True)
+                pred_path = os.path.join(f'vol_figs/pred_vol_{j}.png')
 
-    #             if j == 0:  # Only save GT once per batch
-    #                 gt_path = os.path.join(f'/home/q672126/project/anything6d/vol_figs/gt_vol.png')
-    #                 visualize_volume_with_cubes(gt_volume[i * num_views + j], gt_path) # Save the ground truth PC image
+                if j == 0:  # Only save GT once per batch
+                    gt_path = os.path.join(f'vol_figs/gt_vol.png')
+                    visualize_volume_with_cubes(gt_volume[i * num_views + j], gt_path) # Save the ground truth PC image
 
-    #             visualize_volume_with_cubes(pred_volume[i * num_views + j], pred_path) # Save the predicted PC image
-    #             vis_pred_vols.append(pred_path)  # Append the path to visualize later
+                visualize_volume_with_cubes(pred_volume[i * num_views + j], pred_path) # Save the predicted PC image
+                vis_pred_vols.append(pred_path)  # Append the path to visualize later
 
-    #         # Load the saved images using plt.imread
-    #         gt_img = plt.imread(gt_path)  # Load the saved ground truth image
-    #         pred_imgs = [plt.imread(p) for p in vis_pred_vols]  # Load all prediction images
+            # Load the saved images using plt.imread
+            gt_img = plt.imread(gt_path)  # Load the saved ground truth image
+            pred_imgs = [plt.imread(p) for p in vis_pred_vols]  # Load all prediction images
 
-    #         # Combine GT and predicted images in a grid (e.g., GT and 4 predictions)
-    #         combined_image = np.concatenate([gt_img] + pred_imgs, axis=1)  # Concatenate images horizontally
+            # Combine GT and predicted images in a grid (e.g., GT and 4 predictions)
+            combined_image = np.concatenate([gt_img] + pred_imgs, axis=1)  # Concatenate images horizontally
 
-    #         # Prepare dictionary for WandB logging
-    #         log_dict = {
-    #             f"{prex}_vol_{i}": wandb.Image(combined_image, caption=f"{prex} gt and pred for occupancy volume {i}")
-    #         }
+            # Prepare dictionary for WandB logging
+            log_dict = {
+                f"{prex}_vol_{i}": wandb.Image(combined_image, caption=f"{prex} gt and pred for occupancy volume {i}")
+            }
 
-    #         # Log the combined image (GT and its predictions) to WandB
-    #         self.logger.experiment.log(log_dict)
+            # Log the combined image (GT and its predictions) to WandB
+            self.logger.experiment.log(log_dict)
 
     def num_steps(self) -> int:
         """Get number of steps"""

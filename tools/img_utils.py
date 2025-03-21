@@ -156,21 +156,44 @@ color_list = np.array(
 colors = color_list.reshape((-1, 3)) * 255
 colors = np.array(colors, dtype=np.uint8).reshape(len(colors), 1, 1, 3)
 
+import numpy as np
+import cv2
+
 def visualize_depth_numpy(depth, minmax=None, cmap=cv2.COLORMAP_JET):
     """
-    depth: (H, W)
-    """
-    x = np.nan_to_num(depth) # change nan to 0
-    # if minmax is None:
-    #     mi = np.min(x[x>0]) # get minimum positive depth (ignore background)
-    #     ma = np.max(x)
-    # else:
-    #     mi,ma = minmax
-
-    # x = (x-mi)/(ma-mi+1e-8) # normalize to 0~1
-    x = x-np.min(x[x>0]) if np.max(x) > 0 else x
-    x = np.where(x<1,x/2,1.0-0.5/(x+1e-6)) # normalize to 0~1
+    Visualizes depth map using OpenCV colormap.
     
-    x = (255*x).astype(np.uint8)
-    x_ = cv2.applyColorMap(x, cmap)
-    return x_
+    Parameters:
+        depth: (H, W) numpy array of depth values.
+        minmax: Tuple (min_depth, max_depth) for normalization. If None, it is determined automatically.
+        cmap: OpenCV colormap (default: JET).
+    
+    Returns:
+        Color-mapped depth image (H, W, 3).
+    """
+    x = np.nan_to_num(depth)  # Replace NaN with 0
+
+    # Ensure background remains zero
+    valid_mask = x > 0  # Mask for valid depth values
+    
+    if minmax is None:
+        if np.any(valid_mask):
+            min_depth = np.min(x[valid_mask])  # Smallest nonzero depth
+            max_depth = np.max(x)             # Maximum depth
+        else:
+            min_depth, max_depth = 0, 1  # Default range if no valid values
+    else:
+        min_depth, max_depth = minmax
+
+    # Normalize depth within the specified range
+    x[valid_mask] = (x[valid_mask] - min_depth) / (max_depth - min_depth + 1e-8)
+    x = np.clip(x, 0, 3)  # Ensure values remain in [0,1]
+    
+    # Convert to 8-bit grayscale
+    x_8bit = (x * 255).astype(np.uint8)
+    
+    # Apply colormap
+    depth_colormap = cv2.applyColorMap(x_8bit, cmap)
+
+    return depth_colormap
+
