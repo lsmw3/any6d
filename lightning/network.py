@@ -1006,7 +1006,7 @@ class Network(L.LightningModule):
         replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
         gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
         
-        input_trip_token = self.trip_emb.reshape(-1, self.R*self.R).unsqueeze(0).expand(B*N, -1, -1) # (B*N, 3*C_proj, R*R) -> (B*N, 3*128, 256)
+        input_trip_token = self.trip_emb.permute(1, 2, 3, 0).reshape(-1, self.R*self.R*3).unsqueeze(0).expand(B*N, -1, -1) # (B*N, C_proj, R*R*3) -> (B*N, 128, 256*3)
 
         pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
         # pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
