@@ -394,17 +394,16 @@ class ModLN(L.LightningModule):
         return self.modulate(self.norm(x), shift, scale)  # [N, L, D]
     
 class Decoder(L.LightningModule):
-    def __init__(self, in_dim, sh_dim, scaling_dim, rotation_dim, opacity_dim, coarse_mlp_layers, K=1, latent_dim=256):
+    def __init__(self, in_dim, latent_dim, sh_dim, scaling_dim, rotation_dim, opacity_dim, coarse_mlp_layers, K=1):
         super(Decoder, self).__init__()
 
         self.K = K
         self.sh_dim = sh_dim # 12
-        feat_dim = 16
-        self.feat_dim = feat_dim # 3
+        self.latent_dim = latent_dim # 3
         self.opacity_dim = opacity_dim # 1
         self.scaling_dim = scaling_dim # 2
         self.rotation_dim  = rotation_dim # 4
-        self.out_dim = 3 + sh_dim + feat_dim + opacity_dim + scaling_dim + rotation_dim 
+        self.out_dim = 3 + sh_dim + opacity_dim + scaling_dim + rotation_dim 
         # self.out_dim = sh_dim + opacity_dim + scaling_dim + rotation_dim # 19 # no need to predict position anymore
 
         num_layer = coarse_mlp_layers
@@ -413,20 +412,27 @@ class Decoder(L.LightningModule):
         layers_coarse = [nn.Linear(in_dim, in_dim), nn.ReLU()] + \
                  [nn.Linear(in_dim, in_dim), nn.ReLU()] * (num_layer-1) + \
                  [nn.Linear(in_dim, self.out_dim*K)]
-        
-        self.mlp_coarse = nn.Sequential(*layers_coarse)
 
+        layers_latent = [nn.Linear(in_dim, in_dim), nn.ReLU()] + \
+            [nn.Linear(in_dim, in_dim), nn.ReLU()] * (num_layer*2-1) + \
+            [nn.Linear(in_dim, self.latent_dim*K)]
+
+
+        self.mlp_coarse = nn.Sequential(*layers_coarse)
+        self.mlp_latent = nn.Sequential(*layers_latent)
 
         cond_dim = 8
         self.norm = nn.LayerNorm(in_dim)
         self.cross_att = nn.MultiheadAttention(
             embed_dim=in_dim, num_heads=8, kdim=cond_dim, vdim=cond_dim,
             dropout=0.0, bias=False, batch_first=True)
+        
         layers_fine = [nn.Linear(in_dim, 64), nn.ReLU()] + \
                  [nn.Linear(64, self.sh_dim)]
         self.mlp_fine = nn.Sequential(*layers_fine)
         
         self.init(self.mlp_coarse)
+        self.init(self.mlp_latent)
         self.init(self.mlp_fine)
 
     def init(self, layers):
@@ -446,7 +452,8 @@ class Decoder(L.LightningModule):
     def forward_coarse(self, feats, opacity_shift, scaling_shift, R):
         parameters = self.mlp_coarse(feats).float() # (B*N, 16*16*16, K*(3+19))
         parameters = parameters.view(*parameters.shape[:-1],self.K,-1) # (B, 16*16*16, K, 3+19)
-        offset, sh,feature, opacity, scaling, rotation = torch.split(parameters, [3, self.sh_dim,self.feat_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
+        offset, sh, opacity, scaling, rotation = torch.split(parameters, [3, self.sh_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
+        feature = self.mlp_latent(feats).float() # (B*N, 16*16*16, K*feat)
         # sh, opacity, scaling, rotation = torch.split(parameters, [self.sh_dim, self.opacity_dim, self.scaling_dim, self.rotation_dim], dim=-1)
         opacity = opacity + opacity_shift
         scaling = scaling + scaling_shift
@@ -454,7 +461,7 @@ class Decoder(L.LightningModule):
 
         B = opacity.shape[0]
         sh = sh.view(B,R,R,R,self.K,self.sh_dim//3,3) # (B, 16, 16, 16, K, 4, 3)
-        feature = feature.view(B,R,R,R,self.K,1,self.feat_dim) # (B, 16, 16, 16, K, 3)
+        feature = feature.view(B,R,R,R,self.K,1,self.latent_dim) # (B, 16, 16, 16, K, 3)
         opacity = opacity.view(B,R,R,R,self.K,self.opacity_dim) # (B, 16, 16, 16, K, 1)
         scaling = scaling.view(B,R,R,R,self.K,self.scaling_dim) # (B, 16, 16, 16, K, 2)
         rotation = rotation.view(B,R,R,R,self.K,self.rotation_dim) # (B, 16, 16, 16, K, 4)
@@ -601,6 +608,7 @@ class Network(L.LightningModule):
         # # build volume transformer
         # self.n_groups = cfg.model.n_groups
         self.vol_embedding_dim = cfg.model.embedding_dim
+        self.latent_dim = cfg.model.latent_dim
         
         # 
         # self.vol_decoder = VolTransformer(
@@ -625,7 +633,7 @@ class Network(L.LightningModule):
 
         self.K = cfg.model.K
         # vol_embedding_out_dim = cfg.model.vol_embedding_out_dim # 80
-        self.decoder = Decoder(self.vol_embedding_dim, self.sh_dim, self.scaling_dim, self.rotation_dim, self.opacity_dim, cfg.model.coarse_mlp_layers, self.K)
+        self.decoder = Decoder(self.vol_embedding_dim,self.latent_dim, self.sh_dim, self.scaling_dim, self.rotation_dim, self.opacity_dim, cfg.model.coarse_mlp_layers, self.K)
         self.gs_render = Renderer(sh_degree=cfg.model.sh_degree, white_background=white_bkgd, radius=1)
 
         # parameters initialization
@@ -1157,13 +1165,13 @@ class Network(L.LightningModule):
         #pass gt
         B, N, H, W, C = batch['tar_rgb'].shape
         tar_rgb = batch['tar_rgb'].reshape(B*N,H,W,C).permute(0,3,1,2) # 5 3 420 42t0
-        _, _, tar_feature = self.img_encoder(tar_rgb)
-        tar_feature = tar_feature.reshape(B*N,384,-1) #  5 384 900
+        tar_feature,_,_ = self.img_encoder(tar_rgb)  #B, 900, 384
+        tar_feature = tar_feature.permute(0,2,1) #  5 384 900
         outputs.update({'tar_feature':tar_feature}) # 
 
-        features = outputs['feature_map'].reshape(B, 420, 420,N,-1).permute(0,3,4,1,2).reshape(B*N,-1,420,420) # 5 C 420 420
+        features = outputs['feature_map'].reshape(B,H,N,W,-1).permute(0,2,4,1,3).reshape(B*N,-1,H,W) # 5 C 30 30
         features = F.interpolate(features, size=(30,30), mode='bilinear', align_corners=False).reshape(B*N,-1,900) # 5 C 30 30
-        features_final = self.speedup_conv(features)
+        features_final = self.speedup_conv(features) # B,C,L 
         outputs.update({'pred_feature':features_final})
 
         outputs.update({'pred_volume': pred_volume})

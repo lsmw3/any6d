@@ -49,6 +49,10 @@ class Losses(nn.Module):
 
         # B,V,H,W = batch['mask'].shape
         mask = batch['mask'].permute(0,2,1,3).reshape(B,H,V*W).unsqueeze(-1)
+        # resize to  coarse mask
+        mask_feat = batch['mask']
+        mask_feat = F.interpolate(mask_feat, size=(30, 30), mode='nearest')# B,5, 30, 30
+        mask_feat = mask_feat.reshape(B*V,-1) # B, 4500, 1
         # volume_mask = output['volume_mask'].to(torch.uint8)
         # valid_counts = volume_mask.sum(dim=1)
         # optimize_gaussian = valid_counts.min().item() > 10
@@ -64,7 +68,7 @@ class Losses(nn.Module):
             #     loss += loss_vol*0.2
             # else:
             #     loss = loss_vol*0.2
-            loss = loss_vol*0.2
+            loss = loss_vol*0.1
         
             scalar_stats.update({f'classification BCE': loss_vol.detach()})
 
@@ -89,8 +93,9 @@ class Losses(nn.Module):
                 pred = output['pred_feature']
                 tar = output['tar_feature']
                 cos_sim = F.cosine_similarity(pred, tar, dim=1)  # Cosine similarity along the channel dimension
-                feat_loss = 1 - cos_sim.mean()  # Mean reduction
-
+                feat_loss = 1 - cos_sim  # Mean reduction
+                C=pred.shape[1]
+                feat_loss = (feat_loss[mask_feat]).mean()  # Masked mean reduction
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
                     torch.log(torch.Tensor([10.]).to(color_loss_all.device))

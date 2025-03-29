@@ -3,25 +3,26 @@ import numpy as np
 from tools.img_utils import visualize_depth_numpy
 import numpy as np
 from sklearn.decomposition import PCA
+import torch.nn.functional as F
 
 def visualize_triplane_pca(feats_tri):
     """
     Visualizes triplane features using PCA for each element in the batch and for each plane separately.
     
     Parameters:
-        feats_tri (numpy.ndarray): Input triplane features with shape (B, R, R, 3, C)
+        feats_tri (numpy.ndarray): Input triplane features with shape (B, R, R, K, C)
     
     Returns:
-        numpy.ndarray: Output PCA color visualization with shape (B, R, R*3, 3)
+        numpy.ndarray: Output PCA color visualization with shape (B, R, R*K, 3)
     """
-    B, R, _, num_planes, C = feats_tri.shape
-    final_pca_colors = np.empty((B, R, R * num_planes, 3))
+    B, R1, R2, num_planes, C = feats_tri.shape
+    final_pca_colors = np.empty((B, R1, R2 * num_planes, 3))
 
     for b in range(B):
         pca_planes = []
         for plane in range(num_planes):
             # Extract features for the specific plane and reshape
-            feats = feats_tri[b, :, :, plane, :].reshape(R * R, C)
+            feats = feats_tri[b, :, :, plane, :].reshape(R1 * R2, C)
             
             # Apply PCA to reduce features to 4 dimensions
             pca = PCA(n_components=4)
@@ -35,7 +36,7 @@ def visualize_triplane_pca(feats_tri):
                 feats_pca[:, i] = (feats_pca[:, i] - feats_pca[:, i].min()) / (feats_pca[:, i].max() - feats_pca[:, i].min() + 1e-6)
             
             # Reshape back to (R, R, 3)
-            feats_pca = feats_pca.reshape(R, R, 3)
+            feats_pca = feats_pca.reshape(R1, R2, 3)
             pca_planes.append(feats_pca)
         
         # Concatenate the three planes horizontally: (R, R*3, 3)
@@ -54,8 +55,8 @@ def visualize_feature_pca(feats_tri):
     Returns:
         numpy.ndarray: Output PCA color visualization with shape (B, R, R*3, 3)
     """
-    B, R, _, num_planes, C = feats_tri.shape
-    final_pca_colors = np.empty((B, R, R * num_planes, 3))
+    B, R1, R2, num_planes, C = feats_tri.shape
+    final_pca_colors = np.empty((B, R1, R2 * num_planes, 3))
 
     for b in range(B):
         pca_planes = []
@@ -75,7 +76,7 @@ def visualize_feature_pca(feats_tri):
             feats_pca[:, i] = (feats_pca[:, i] - feats_pca[:, i].min()) / (feats_pca[:, i].max() - feats_pca[:, i].min() + 1e-6)
         
         # Reshape back to (R, R, 3)
-        feats_pca = feats_pca.reshape(R, R*num_planes, 3)
+        feats_pca = feats_pca.reshape(R1, R2, num_planes, 3).transpose(0,2,1,3).reshape(R1, num_planes*R2, 3)
         final_pca_colors[b] = feats_pca
 
     return final_pca_colors
@@ -86,9 +87,6 @@ def vis_appearance_depth(output, batch):
     B, V, H, W = batch['tar_rgb'].shape[:-1]
 
     pred_rgb = output[f'image'].detach().cpu().numpy()
-    feat = output[f'feature_map'].detach().cpu().numpy().reshape(B,H,W,V,-1) # B, 420, 420, 5，16
-    feat_vis = visualize_feature_pca(feat)
-    
 
     pred_depth = output[f'depth'].detach().cpu().numpy()
     gt_rgb   = batch[f'tar_rgb'].permute(0,2,1,3,4).reshape(B, H, V*W, 3).detach().cpu().numpy()
@@ -96,8 +94,37 @@ def vis_appearance_depth(output, batch):
     
     near_far = batch['near_far'][0].tolist()
     pred_depth_colorlized = np.stack([visualize_depth_numpy(_depth, near_far) for _depth in pred_depth]).astype('float32')/255
-    outputs.update({f"gt_rgb":gt_rgb, f"gt_occluded_rgb":gt_occluded_rgb, f"pred_rgb":pred_rgb, f"pred_depth":pred_depth_colorlized, "pred_feat":feat_vis})
+    outputs.update({f"gt_rgb":gt_rgb, f"gt_occluded_rgb":gt_occluded_rgb, f"pred_rgb":pred_rgb, f"pred_depth":pred_depth_colorlized})
     
+    if 'feature_map' in output:
+        feat = output[f'feature_map'].detach().cpu().numpy().reshape(B,H,V,W,-1).transpose(0,1,3,2,4) # B, 420, 420, 5，16
+        feat_vis = visualize_feature_pca(feat)
+        outputs.update({f"feat_map":feat_vis}) 
+
+        # comparison with the GT feature map
+        # feat_gt = output['tar_feature'].permute(0,2,1).detach().cpu().numpy().reshape(B,V,30,30,-1).transpose(0,2,3,1,4) # B, 30, 30, 5, 16
+        # feat_pred = output['pred_feature'].permute(0,2,1).detach().cpu().numpy().reshape(B,V,30,30,-1).transpose(0,2,3,1,4)
+        # # upsampling and masking
+        # Resize tar_feature
+        feat_gt = output['tar_feature'].detach().cpu()  
+        feat_gt = feat_gt.reshape(B * V, -1, 30, 30)  # Reshape to (B*V, C, 30, 30)
+        feat_gt = F.interpolate(feat_gt, size=(H, W), mode='bilinear', align_corners=False)  # Resize to (420, 420)
+        feat_gt = feat_gt.reshape(B, V, -1, H, W).permute(0, 3, 4, 1, 2).numpy()  # Reshape and move to CPU
+
+        # Resize pred_feature
+        feat_pred = output['pred_feature'].detach().cpu() # B,C,L
+        feat_pred = feat_pred.reshape(B * V, -1, 30, 30)  # Reshape to (B*V, C, 30, 30)
+        feat_pred = F.interpolate(feat_pred, size=(H, W), mode='bilinear', align_corners=False)  # Resize to (420, 420)
+        feat_pred = feat_pred.reshape(B, V, -1, H, W).permute(0, 3, 4, 1, 2).numpy()  # Reshape and move to CPU
+        
+        # apply mask
+        mask = batch['mask'].detach().cpu().numpy().transpose(0,2,3,1)  # Ensure mask is on the same device
+        feat_gt = feat_gt * mask[..., None] # Apply mask
+        feat_pred = feat_pred * mask[..., None]  # Apply mask
+
+        feat_gt_vis = visualize_feature_pca(np.concatenate([feat_pred,feat_gt],axis=0))
+        outputs.update({f"gt_pred_feat":feat_gt_vis})                                            
+
 
     if 'rend_normal' in output:
         rend_normal = torch.nn.functional.normalize(output[f'rend_normal'].detach(),dim=-1)
@@ -121,6 +148,7 @@ def vis_appearance_depth(output, batch):
         feats_tri = output['proj_feats_vis'].detach().cpu().numpy() # B,R,R,3,C
         feats_vis = visualize_triplane_pca(feats_tri)      
         outputs.update({f"proj_feats_vis": feats_vis})
+
 
     if 'image_fine' in output:
         rgb_fine = output[f'image_fine'].detach().cpu().numpy()

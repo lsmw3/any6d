@@ -18,6 +18,7 @@ model:
 
     view_embed_dim: 32
     embedding_dim: 128
+    latent_dim: 16
 
     label_in_channels: 128
     label_out_channels: 384
@@ -61,7 +62,7 @@ feature_vol_upsampler:
 
 train_dataset:
     dataset_name: custom # shapenet_temp housecat6d
-    data_root: /home/umaru/dataset/omniobject3d/single_train # train_on_one_category
+    data_root: /home/umaru/dataset/omniobject3d/single_train_overfit # train_on_one_category
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
