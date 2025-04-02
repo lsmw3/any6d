@@ -84,7 +84,7 @@ def main(cfg, specs):
 
     my_system = system(cfg, specs)
 
-    trainer = L.Trainer(devices=cfg.gpu_id,
+    trainer = L.Trainer(devices=[0],
                         num_nodes=1,
                         max_epochs=cfg.train.n_epoch,
                         # max_epochs=1,

@@ -1,4 +1,4 @@
-gpu_id: [0, 1, 2, 3]
+gpu_id: [0]
 
 exp_name: LaRa/release-test
 n_views: 1
@@ -48,10 +48,10 @@ triplane_e:
     init_scale: 0.25
     # n_ctx: 256
     embedding_channels: 128
-    input_channels: 384
-    output_channels: 384
+    input_channels: 128
+    output_channels: 128
     width: 256
-    crossattndit_block_depth: 10
+    crossattndit_block_depth: 4
 
 feature_vol_upsampler:
     in_channels: 128
@@ -60,33 +60,33 @@ feature_vol_upsampler:
     stride: 2
 
 train_dataset:
-    dataset_name: custom # shapenet_temp housecat6d
-    data_root: /home/q672126/project/omni3d/single # train_on_one_category
+    dataset_name: objectron # shapenet_temp housecat6d
+    data_root: /home/q672126/project/anything6d/ojectron_instances # train_on_one_category
     split: train
     img_size: [420, 420] # image resolution, [852,1096]
     n_group: ${n_views}
     voxel_reso: ${voxel_reso}
-    n_scenes: 42
+    n_scenes: 40
     load_normal: True
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
 
 test_dataset:
-    dataset_name: custom # shapenet_temp housecat6d
-    data_root: /home/q672126/project/omni3d/single # val_on_one_category
+    dataset_name: objectron # shapenet_temp housecat6d
+    data_root: /home/q672126/project/anything6d/ojectron_instances # val_on_one_category
     split: test
     img_size: [420, 420]
     n_group: ${n_views}
     voxel_reso: ${voxel_reso}
-    n_scenes: 42
+    n_scenes: 40
     load_normal: True
     positional_labelling: False
     clip_labelling: True
     labelling_dimension: 128
 
 train:
-    batch_size: 32
+    batch_size: 2
     lr: 2e-4
     beta1: 0.9
     beta2: 0.95
@@ -97,14 +97,14 @@ train:
     limit_train_batches: 1.0 # 0.2
     limit_val_batches: 1.0 # 0.02
     save_ckpt_every_n_epoch: 10
-    check_val_every_n_epoch: 5
-    log_train_every_n_step: 300
-    start_save: 200
-    start_fine: 200
+    check_val_every_n_epoch: 5000
+    log_train_every_n_step: 10
+    start_save: 2000
+    start_fine: 2000
     lambda_normal: 0.2
-    start_normal: 350
+    start_normal: 35000
 test:
-    batch_size: 32
+    batch_size: 2
     log_val_every_n_step: 10
 
 logger: 

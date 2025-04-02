@@ -63,7 +63,7 @@ class Losses(nn.Module):
 
                 # if start_triplane:
                 color_loss_all = (output[f'image{prex}']-tar_rgb)**2
-                loss += color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*5 + color_loss_all[mask.expand(-1, -1, -1, 3) == 0].mean()
+                loss += (color_loss_all[mask.expand(-1, -1, -1, 3) == 1].mean()*5 + color_loss_all[mask.expand(-1, -1, -1, 3) == 0].mean())*10
                 # loss += color_loss_all.mean()
 
                 psnr = -10. * torch.log(color_loss_all.detach().mean()) / \
@@ -95,7 +95,7 @@ class Losses(nn.Module):
 
                     normal_error = ((1 - (rend_normal_world * depth_normal).sum(dim=-1))*acc_map).mean()
                     scalar_stats.update({f'depth_norm{prex}': normal_error.detach()})
-                    loss += normal_error * 0.2 # / (normal_error/ loss_cd).detach()
+                    # loss += normal_error * 0.2 # / (normal_error/ loss_cd).detach()
 
                 # if 'pred_volume' in output:
                 #     gt_volume = output['gt_volume']#.reshape(B, -1)

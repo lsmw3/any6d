@@ -641,7 +641,7 @@ class Network(L.LightningModule):
         self.trip_transformer = TriplaneTokenTransformer(cfg=cfg,
                                                          device="cuda",
                                                          dtype=torch.float32,
-                                                         n_ctx=cfg.voxel_reso ** 2,
+                                                         n_ctx=cfg.voxel_reso ** 2 * 3,
                                                          cross_attn_heads=cfg.triplane_e.cross_attn_heads,
                                                          self_attn_heads=cfg.triplane_e.self_attn_heads,
                                                          width=cfg.triplane_e.width,
@@ -930,7 +930,6 @@ class Network(L.LightningModule):
     
 
     def triplane_projection(self, points, aug=False):
-
         input_pc = points.permute(0,2,1) # B*N, 3, Np
         B, _, Np = input_pc.shape # B*N, 3+384, 1024
         coords = input_pc # B*N, 3, 1024
@@ -944,7 +943,7 @@ class Network(L.LightningModule):
         norm_coords = torch.clamp(norm_coords * (self.R - 1), 0, self.R - 1 - self.eps) # normalize to (0, R-1)
 
         sample_idx = torch.arange(B, dtype=torch.int64).to(dev)
-        sample_idx = sample_idx.unsqueeze(-1).expand(-1, Np).reshape(-1).unsqueeze(1) # (B*N*Np, 1)
+        sample_idx = sample_idx.unsqueeze(-1).expand(-1, Np).reshape(-1).unsqueeze(1) # (B*Np, 1)
         norm_coords = norm_coords.transpose(1, 2).reshape(B * Np, 3)
         coords_int = torch.round(norm_coords).to(torch.int64)
         coords_int = torch.cat((sample_idx, coords_int), 1) # (B*Np, 1+3)
@@ -1002,16 +1001,16 @@ class Network(L.LightningModule):
             label_cls = dino_cls
         ########################################################
 
-        gt_volume = batch['tar_volume']
-        replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
-        gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
+        # gt_volume = batch['tar_volume']
+        # replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
+        # gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
         
         input_trip_token = self.trip_emb.permute(1, 2, 3, 0).reshape(-1, self.R*self.R*3).unsqueeze(0).expand(B*N, -1, -1) # (B*N, C_proj, R*R*3) -> (B*N, 128, 256*3)
 
-        pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256, 384)
+        pred_proj_feat = self.trip_transformer(input_trip_token, dino_feat, label_cls) # (B*N, 256*3, 128)
         # pred_proj_feat = input_trip_token.permute(0, 2, 1) # (B*N, 256, 384)
 
-        pred_proj_feat_list = pred_proj_feat.reshape(B*N, -1, self.vol_embedding_dim, 3) # (B*N, R*R, 128, 3)
+        pred_proj_feat_list = pred_proj_feat.reshape(B*N, -1, 3, self.vol_embedding_dim).permute(0, 1, 3, 2) # (B*N, R*R, 128, 3)
         pred_proj_feat_list = [pred_proj_feat_list[...,i] for i in range(3)] # (List[(B*N, R*R, 128)]*3)
 
         feat_vol = self.tpv_agg(pred_proj_feat_list).reshape(B*N,-1,self.R,self.R,self.R) # (B*N, 128, 16, 16, 16)

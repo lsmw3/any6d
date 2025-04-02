@@ -37,7 +37,7 @@ class system(L.LightningModule):
 
         for key, value in scalar_stats.items():
             if key in ['psnr', 'mse', 'ssim', 'classification BCE', 'normal', 'depth_norm']:
-                self.log(f'train/{key}', value, sync_dist=True)
+                self.log(f'train/{key}', value, sync_dist=True, prog_bar=True)
 
         self.logger.experiment.log({'lr':self.trainer.optimizers[0].param_groups[0]['lr']})
 

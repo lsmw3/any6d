@@ -196,7 +196,6 @@ class Projection(nn.Module):
         return pillar_feat.reshape(B, R, R, self.out_channels)
 
 
-
 def _compute_fov(intrinsic_matrix, image_width, image_height):
     # Extract focal lengths
     f_x = intrinsic_matrix[0, 0]
