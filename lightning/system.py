@@ -45,7 +45,7 @@ class system(L.LightningModule):
         if 0 == self.trainer.global_step % self.cfg.train.log_train_every_n_step and (self.trainer.local_rank == 0):
             self.vis_results(output, batch, prex='train')
             #self.vis_results_aux(output, batch, prex='train')
-            self.vis_volume(output, prex='train')
+            #self.vis_volume(output, prex='train')
             
         torch.cuda.empty_cache()
 

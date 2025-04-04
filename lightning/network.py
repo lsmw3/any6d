@@ -692,15 +692,15 @@ class Network(L.LightningModule):
         #     )
 
         # # initiliaze feature embedding
-        # feat volume classifier
-        self.vol_classifier = nn.Sequential(
-            # MLP(device='cuda', dtype=torch.float32, width=self.vol_embedding_dim, init_scale=float(1.0)),
-            # nn.GELU(),
-            nn.Linear(self.vol_embedding_dim, 1, device='cuda', dtype=torch.float32),
-            # nn.LeakyReLU(),
-            # nn.Linear(self.vol_embedding_dim//2, 1, device='cuda', dtype=torch.float32),
-            nn.Sigmoid()
-        )
+        # # feat volume classifier
+        # self.vol_classifier = nn.Sequential(
+        #     # MLP(device='cuda', dtype=torch.float32, width=self.vol_embedding_dim, init_scale=float(1.0)),
+        #     # nn.GELU(),
+        #     nn.Linear(self.vol_embedding_dim, 1, device='cuda', dtype=torch.float32),
+        #     # nn.LeakyReLU(),
+        #     # nn.Linear(self.vol_embedding_dim//2, 1, device='cuda', dtype=torch.float32),
+        #     nn.Sigmoid()
+        # )
         
 
     def build_dense_grid(self, reso):
@@ -1059,12 +1059,12 @@ class Network(L.LightningModule):
         volume_feature = feat_vol.permute(0, 2, 3, 4, 1) # (B*N, 32, 32, 32, 128)
         
         
-        gt_volume = batch['tar_volume']
+        #gt_volume = batch['tar_volume']
         
-        replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
-        gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
+        #replicated_gt = gt_volume.unsqueeze(1).expand(-1, N, -1, -1, -1)
+        #gt_volume = replicated_gt.reshape(B*N, self.R, self.R, self.R) # (B*N, 16, 16, 16)
 
-        pred_volume = self.vol_classifier(volume_feature).squeeze(-1) # (B*N, 16, 16, 16)
+        #pred_volume = self.vol_classifier(volume_feature).squeeze(-1) # (B*N, 16, 16, 16)
 
         proj_feats_vis = pred_proj_feat.reshape(B*N,self.R,self.R,3,-1) # (B*N, R*R*3, C_proj)
 
@@ -1174,6 +1174,6 @@ class Network(L.LightningModule):
         features_final = self.speedup_conv(features) # B,C,L 
         outputs.update({'pred_feature':features_final})
 
-        outputs.update({'pred_volume': pred_volume})
-        outputs.update({'gt_volume':gt_volume})
+        #outputs.update({'pred_volume': pred_volume})
+        #outputs.update({'gt_volume':gt_volume})
         return outputs

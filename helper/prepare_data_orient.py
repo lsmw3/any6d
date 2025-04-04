@@ -18,7 +18,7 @@ from pytorch3d.ops import knn_points, knn_gather
 from pytorch3d.structures import Meshes
 from pytorch3d.ops import sample_points_from_meshes 
 from lightning.network import DinoWrapper
-from helper.feat_pc_modules import fuse_feature_rgbd, vis_pca, apply_pca_and_store_colors
+from helper.feat_pc_modules import fuse_feature_rgbd_OLD, vis_pca, apply_pca_and_store_colors
 from sklearn.neighbors import NearestNeighbors
 
 import objaverse.xl as oxl
@@ -488,16 +488,20 @@ def find_tsne_neighbors(selected_index, tsne_results, num_neighbors=5):
     return neighbor_indices, distances[0][1:]  # Return the indices and distances to the neighbors
 
 
-def process_category(category_path, output_path):
+def process_category(category_path, input_path, output_path):
     """
     Process all objects in a category and create a single h5py file.
     """
     # # Create output directory if it doesn't exist
     # os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
+    backbone = DinoWrapper(
+    model_name='dinov2_vits14',
+    is_train=False,
+    ).to('cuda').eval()
     # Get all object folders in this category
     category_name = os.path.basename(category_path)
     object_folders = sorted(glob.glob(category_path+'/*/*'))
+    os.makedirs(output_path, exist_ok=True)
     # object_folders = [f for f in os.listdir(sub_folders) if os.path.isdir(os.path.join(category_path, f))]
     category_data = []
     kpts_data = []
@@ -522,12 +526,12 @@ def process_category(category_path, output_path):
     
     # # Create temporary directory for extraction
     # os.makedirs('temp', exist_ok=True)
-    num= 16
+    num= 9
     # Create h5py file for this category
     for i, obj_folder in enumerate(tqdm(object_folders, desc=f"Processing {category_name}")):
         object_name = f"{category_name}_{i}"  # e.g., chair_1, chair_2, etc.
 
-        h5_file_path = os.path.join(output_path, f"{object_name}.h5")
+        h5_file_path = os.path.join(input_path, f"{object_name}.h5")
         print(len(category_data))
         print(num)
         if os.path.exists(h5_file_path):
@@ -575,13 +579,13 @@ def process_category(category_path, output_path):
     # # Visualization
     import matplotlib
     from sklearn.decomposition import PCA
-    matplotlib.use('TkAgg')
-    plt.figure(figsize=(8, 6))
+    # matplotlib.use('TkAgg')
+    # plt.figure(figsize=(8, 6))
 
-    plt.scatter(tsne_results[:, 0], tsne_results[:, 1], c=cluster_labels, cmap='tab10', alpha=0.8)
-    plt.title("t-SNE with K-means Clustering")
-    plt.colorbar(label="Cluster ID")
-    plt.show()
+    # plt.scatter(tsne_results[:, 0], tsne_results[:, 1], c=cluster_labels, cmap='tab10', alpha=0.8)
+    # plt.title("t-SNE with K-means Clustering")
+    # plt.colorbar(label="Cluster ID")
+    # plt.show()
 
     all_colors = apply_pca_and_store_colors(kpts_data,True)[:num].reshape(-1,3)
     all_points = kpts_data[:num, :, :3]
@@ -595,22 +599,26 @@ def process_category(category_path, output_path):
     all_points_ = kpts_data[:num,:,:3].reshape(-1,3) + center.reshape(-1,3)
     all_points_ = all_points_.reshape(-1,3)
     all_colors_ = all_colors
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(all_points_)
-    pcd.colors = o3d.utility.Vector3dVector(all_colors_)
-    o3d.visualization.draw_geometries([pcd])
+    # pcd = o3d.geometry.PointCloud()
+    # pcd.points = o3d.utility.Vector3dVector(all_points_)
+    # pcd.colors = o3d.utility.Vector3dVector(all_colors_)
+    # o3d.visualization.draw_geometries([pcd])
 
 
+    # process each file in the category
+    angle_list = np.zeros(num)
     processed_indices = set()
     _all_points=0
     # find neighbors of source pcd
     for cluster_idx in range(num_clusters):
         # want to deal with the first cluster
         for q,pcd_idx in enumerate(range(reordered_labels[cluster_idx], reordered_labels[cluster_idx+1])):
+            idx = reordered_indices[pcd_idx]
+
             if q==0:
                 processed_indices.add(reordered_indices[pcd_idx])
+                angle_list[idx]=0
                 continue  
-            idx = reordered_indices[pcd_idx]
             #idx = 14    
             nbr_idx,_ = find_tsne_neighbors(idx, tsne_results, num_neighbors=5)
             # Filter out neighbors that have not been processed yet
@@ -677,10 +685,10 @@ def process_category(category_path, output_path):
             # find the best match
             best_match = np.argmin(error_list)
             angle = rotate_angle_list[best_match]
-
             print(f"Best match angle: {angle}")
             # rotate the pointcloud
             #all_points[idx*K:(idx+1)*K] = rotate_pointcloud_z(torch.from_numpy(all_points[idx*K:(idx+1)*K]), angle).numpy()
+            angle_list[idx] = angle
             kpts_data[idx,:,:3] = rotate_pointcloud_z(torch.from_numpy(kpts_data[idx,:,:3]), angle).numpy()
             #kpts_data[idx,:,:3] = rotate_pointcloud_z(torch.from_numpy(kpts_data[idx,:,:3]), angle).numpy()
             # pts1 = query_data[:,:3] + _center[i,None,:]
@@ -729,8 +737,8 @@ def process_category(category_path, output_path):
             #o3d.visualization.draw_geometries([pcd,processed_pcd])
 
 
-
             #o3d.io.write_point_cloud(os.path.join(feature_object_path,f"{object_name}.pcd"), pcd)
+
     pcd = o3d.geometry.PointCloud()
     #all_points = all_points + tsne_center[:,None,:].repeat(K,axis=1).reshape(-1,3)
     print(reordered_indices)
@@ -751,7 +759,84 @@ def process_category(category_path, output_path):
     pcd.colors = o3d.utility.Vector3dVector(all_colors)
     o3d.visualization.draw_geometries([pcd])
 
-    ######################################################
+
+    # Create h5py file for this category
+    pcd_list =[]
+    for i, obj_folder in enumerate(tqdm(object_folders, desc=f"Processing {category_name}")):
+        if i >= num:
+            break
+
+        object_name = f"{category_name}_{i}"  # e.g., chair_1, chair_2, etc.
+        h5_file_path = os.path.join(input_path, f"{object_name}.h5")
+        if not os.path.exists(h5_file_path):
+            print(f"Skipping {object_name}, file not found.")
+            continue
+
+        with h5py.File(h5_file_path, 'r') as h5_file:
+            object_data = {}
+            for key in h5_file[object_name].keys():
+                if key == 'feature_points':
+                    continue
+                object_data[key] = h5_file[object_name][key][...]  # Load as numpy array
+
+        lens_ = (len(object_data) - 3) // 6  # Ensure category_data is defined
+
+        # Store data for each view
+        for k in range(lens_):
+            if f'c2w_{k}' in object_data:
+                c2w_k = object_data[f'c2w_{k}']
+                angle_degrees = angle_list[i]
+                #angle_degrees = 90
+                angle_rad = math.radians(angle_degrees)
+                R = np.array([[math.cos(angle_rad), -math.sin(angle_rad), 0],
+                            [math.sin(angle_rad),  math.cos(angle_rad), 0],
+                            [0,                    0,                   1]], dtype=np.float32)
+                c2w_k[:3, :3] = R @ c2w_k[:3, :3] # Apply rotation
+                c2w_k[:3, 3] = R @ c2w_k[:3, 3]  # Apply translation
+                object_data[f'c2w_{k}'] = c2w_k
+                print(angle_degrees)
+
+        category_data = object_data
+        print(f"Processed {object_name}")
+
+        ixt = object_data['cam_k']
+        cameras= []
+        images = []
+        depths = []
+        masks = []
+        for k in range(lens_):
+            images.append(object_data[f'rgb_{k}'])
+            depths.append(object_data[f'depth_{k}'])
+            masks.append(object_data[f'mask_{k}'])
+            cameras.append((ixt, object_data[f'c2w_{k}']))
+        # Get feature model
+        images = np.stack(images, axis=0)
+        depths = np.stack(depths, axis=0)
+        masks = np.stack(masks, axis=0)
+        pcd = fuse_feature_rgbd_OLD(backbone, images, depths, masks, cameras)   
+        pcd_list.append(pcd)
+        output_file = os.path.join(output_path, f"{object_name}.h5")
+        with h5py.File(output_file, 'w') as h5_file:
+            obj_grp = h5_file.create_group(object_name)
+            for key, value in object_data.items():
+                obj_grp.create_dataset(key, data=value, compression='gzip', compression_opts=4)
+    
+
+
+    pcd = np.stack(pcd_list, axis=0)
+    col = int(np.sqrt(num))
+    K = pcd.shape[1]
+    center = create_array(2,col,col)[:,None,:].repeat(K, axis=1)
+    _all_points = pcd[:num,:,:3].reshape(-1,3) + center.reshape(-1,3)
+    _all_colors = np.array([[1,0,0] for _ in range(_all_points.shape[0])])
+    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+    
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(_all_points)
+    pcd.colors = o3d.utility.Vector3dVector(_all_colors)
+
+    o3d.visualization.draw_geometries([pcd,axis])
+
     return output_path
 
 
@@ -792,25 +877,24 @@ def run():
         gob_id = json.load(f)
     
     data_root = '/home/umaru/dataset/G-objaverse'  # Root directory containing category folders
-    data_dir = '/home/umaru/dataset/G-objaverse_h5py_files'  # Directory for output h5py files
-    #data_dir = '/home/umaru/dataset/G-objaverse_h5py_files_rotated'  # Directory for output h5py files
+    input_dir = '/home/umaru/dataset/G-objaverse_h5py_files'  # Directory containing input h5py files
+    output_dir = '/home/umaru/dataset/G-objaverse_h5py_files_rotated'  # Directory for output h5py files
     feature_model_dir = '/home/umaru/dataset/G-objaverse_feature_model'
     feature_image_dir = '/home/umaru/dataset/G-objaverse_feature_image'
-    #os.makedirs(out_put_data_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
     os.makedirs(feature_image_dir, exist_ok=True)
     os.makedirs(feature_model_dir, exist_ok=True)
     categories = [os.path.basename(f) for f in glob.glob(data_root+'/*')]
     
     category_files = []
     for category in categories:
-        if category not in ['chairr']:
+        if category not in ['chair']:
             continue
         category_path = os.path.join(data_root, category)
         if os.path.isdir(category_path):
-            feature_model_path = os.path.join(feature_model_dir, category)
-            feature_image_path = os.path.join(feature_image_dir, category)
-            out_put_data_path = os.path.join(data_dir, category)
-            result_file = process_category(category_path,out_put_data_path)
+            input_dir_ = os.path.join(input_dir, category)
+            output_dir_ = os.path.join(output_dir, category)
+            result_file = process_category(category_path, input_dir_, output_dir_)
             category_files.append(result_file)
         else:
             print(f"Warning: Category directory {category_path} not found.")

@@ -176,6 +176,7 @@ def process_category(category_path, output_path, feature_model_path, feature_vis
         feature_image_path = os.path.join(feature_vis_path, object_id)
         os.makedirs(feature_object_path, exist_ok=True)
         os.makedirs(feature_image_path, exist_ok=True)
+        os.makedirs(output_path, exist_ok=True)
         
         # Get all subfolders in this object folder (00000, 00001, ..., 00039)
         subfolders = sorted([f for f in os.listdir(object_path) if os.path.isdir(os.path.join(object_path, f))])
@@ -389,12 +390,13 @@ def run():
     
     category_files = []
     for category in categories:
-        if category not in ['shoe']:
+        if category not in ['chairr']:
             continue
         category_path = os.path.join(data_root, category)
         if os.path.isdir(category_path):
             feature_model_path = os.path.join(feature_model_dir, category)
             feature_image_path = os.path.join(feature_image_dir, category)
+            output_dir = os.path.join(output_dir, category)
             result_file = process_category(category_path, output_dir, feature_model_path, feature_image_path,id_info)
             category_files.append(result_file)
         else:
@@ -405,7 +407,3 @@ def run():
     #     merge_h5py_files(category_files, os.path.join(output_dir, "all_categories.h5"))
     # else:
     #     print("No category files were created. Check your input data.")
-
-
-if __name__ == "__main__":
-    main()

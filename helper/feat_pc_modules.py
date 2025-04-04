@@ -336,6 +336,103 @@ def fuse_feature_rgbd(extractor, images, depths, masks, cameras, model_points,sa
 
     return downsampled_feature_point_cloud.detach().cpu().numpy()
 
+
+def fuse_feature_rgbd_OLD(extractor, images, depths, masks, cameras):
+    device = "cuda"
+    feature_point_cloud_list = []
+    feature_rgb_list = []   
+    for i in range(images.shape[0]):
+        # Extract DINO feature
+        image = (torch.from_numpy(images[i]).to(device).permute(2,0,1).unsqueeze(0)/255).float()
+        #image_tensor = featup_preprocess(image)
+        #lr_feat, _ = extractor.get_feat(image_tensor)
+        #hr_feat = featup_upsampler(backbone=extractor, lr_feat=lr_feat, guidance=image_tensor)
+        #_,_,lr_feat = extractor.forward(image)
+        #H,W = image.shape[2], image.shape[3]
+        #hr_feat = F.interpolate(lr_feat, size=(H,W), mode='bilinear', align_corners=False)
+        
+        # Apply the mask
+        mask = torch.from_numpy(masks[i])
+    
+        mask = mask.permute(2,0,1).unsqueeze(0).to(device) 
+        #H_,W_ = lr_feat.shape[2], lr_feat.shape[3]
+        #lr_mask = F.interpolate(mask, size=(H_,W_), mode='nearest')
+        #lr_feat_masked = lr_feat * lr_mask.bool()
+    
+        #dino_feat_masked = hr_feat * mask.bool()
+        #dino_feat_masked = dino_feat_masked.squeeze(0)
+        #feature_rgb_list.append(lr_feat_masked.squeeze(0).detach().cpu().permute(1,2,0).numpy())
+        # # ---------------------
+        # vis_dino_feats = dino_feat_masked.detach().cpu().permute(1,2,0).numpy().reshape(-1,384)
+        # pca_color = vis_pca(vis_dino_feats, first_three=False)
+        # pca_color = pca_color.reshape(420,420,3)
+        # plt.imshow(pca_color)
+        # plt.axis('off') 
+        # plt.savefig(f"dino.jpg")
+        # # ---------------------
+
+        # Prepare Depth map
+        depth = torch.from_numpy(depths[i].astype(np.float32)).squeeze(-1)
+        # depth = depth / 1000.0  # Convert to meters
+        # points, features = backproject_points(depth=depth, 
+        #                                       features=dino_feat_masked.cpu(), 
+        #                                       ixt=cameras[i][0], ext=cameras[i][1])
+        
+        points, _ = backproject_depth_to_3d(depth=depth, intrinsics=torch.from_numpy(cameras[i][0]), c2w_extrinsics=torch.from_numpy(cameras[i][1]))
+        
+        points = points.detach().cpu()
+        #features = features.detach().cpu()
+    
+        # randomly sample 1024 points
+        if points.shape[0] > 1024:
+            idx = np.random.choice(points.shape[0], 1024, replace=False)
+            points = points[idx]
+
+
+        feature_point_cloud = points
+        feature_point_cloud_list.append(feature_point_cloud)
+
+        print(i)
+
+
+    #feature_rgb = np.stack(feature_rgb_list, axis=0) # (B, H, W, C)
+    #B, H, W, C = feature_rgb.shape
+    #colors = vis_pca(feature_rgb.reshape(-1,384), first_three=False).reshape(B,H,W,3)
+    #image_grid(colors,10,save_folder)
+
+    # random sample 4096 pts from the feature_point_cloud_list
+ 
+
+    feat_point_cloud = torch.cat(feature_point_cloud_list, dim=0)
+    # use open3d to visualize the feat_point_cloud and model_points together use red and blue color
+    # import open3d as o3d
+    # pcd = o3d.geometry.PointCloud()
+    # axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=1.0, origin=[0, 0, 0])
+
+    # pcd.points = o3d.utility.Vector3dVector(feat_point_cloud[:,:3].numpy())
+    # pcd.colors = o3d.utility.Vector3dVector(np.array([[1,0,0] for _ in range(feat_point_cloud.shape[0])]))
+    # o3d.visualization.draw_geometries([pcd,axis])
+    
+    #idx = np.random.choice(feat_point_cloud.shape[0],4096, replace=False)
+    #model_points = feat_point_cloud[idx,:3]    
+    #voxel_size = 0.05  # Adjust the voxel size as needed
+
+    # Calculate density
+    Nbrs = 20  # Adjust the radius as needed
+    densities = compute_point_density(feat_point_cloud[:,:3], Nbrs)
+
+    # Sample points based on density
+    num_samples = 4096  # Adjust the number of samples as needed
+    model_points = sample_based_on_density(feat_point_cloud[:,:3], densities, num_samples)
+
+
+    downsampled_feature_point_cloud = downsample_feature_pc(feat_point_cloud, model_points)
+
+
+    return downsampled_feature_point_cloud.detach().cpu().numpy()
+
+
+
 def downsample_feature_pc(feature_point_cloud, model_points, num_pts=1024, k_nearest_neighbors=100):
     #N_1, C_1 = 2048, 384  # Example number of points and features
 
